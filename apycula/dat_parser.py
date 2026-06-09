@@ -270,6 +270,29 @@ class Datfile:
             ret.append(rowArr)
         return ret
 
+    def read_cib_fabric_node(self, RSTable5ATOffset):
+        # The CibFabricNode table (6 rows of r,c,wire) feeds the PINCFG bel's
+        # input wires (SSPI, UNK0_VCC..UNK4_VCC). Its position inside the RS
+        # table drifts between Gowin EDA versions: the historic apicula layout
+        # had it at +0x27254, but newer Gowin emits it at +0x2730c (+0xb8). The
+        # wrong offset reads all-0xffff (every entry "absent"), silently
+        # dropping the PINCFG input wires. Try the known offsets and keep the
+        # first that yields at least one valid (non-0xffff) entry with
+        # plausible grid coordinates.
+        candidate_deltas = [0x2730c, 0x27254]
+        fallback = None
+        for delta in candidate_deltas:
+            grid = self.read_scaledGrid16(6, 3, 6, 1, RSTable5ATOffset + delta)
+            if fallback is None:
+                fallback = grid
+            valid = [row for row in grid
+                     if row[0] != 0xffff and 0 < row[0] < 1024 and 0 < row[1] < 1024]
+            if valid:
+                return grid
+        # Neither candidate validated; return the historic-offset read so the
+        # rest of the parse is unaffected (PINCFG inputs will simply be empty).
+        return fallback
+
     def read_5Astuff(self) -> dict:
         RSTable5ATOffset = 0x7b4a8
         ret = { }
@@ -443,7 +466,13 @@ class Datfile:
         ret["Adc25kIns"]            = self.read_scaledGrid16i(25, 3, 6, 1, RSTable5ATOffset + 0x26dfe)
         ret["Adc25kOuts"]           = self.read_scaledGrid16i(28, 3, 6, 1, RSTable5ATOffset + 0x26e94)
 
-        ret["CibFabricNode"]        = self.read_scaledGrid16(6, 3, 6, 1, RSTable5ATOffset + 0x27254)
+        # Newer Gowin EDA drifts the CibFabricNode table by +0xb8 relative to the
+        # apicula reference layout (0x27254 -> 0x2730c). The old offset landed on
+        # all-0xffff (absent) and dropped every PINCFG input wire (SSPI/UNK*_VCC),
+        # breaking nextpnr routing of the config-pin bel. Detect both layouts so
+        # this stays correct across Gowin versions; fall back to the historic
+        # offset if neither validates.
+        ret["CibFabricNode"]        = self.read_cib_fabric_node(RSTable5ATOffset)
         ret["SharedIOLogicIOBloc"]  = self.read_scaledGrid16(0x9c, 2, 2, RSTable5ATOffset + 0x13208, 0xe)
 
         ret["TopAMBGA121N"]         = self.read_arr16_at(200, RSTable5ATOffset + 0x2668e, 0)
