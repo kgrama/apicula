@@ -91,9 +91,14 @@ def read_one_file(f, tile_type, device):
                      0x51, 0x53, 0x55, 0x57, 0x5c}:
             typn = "logicinfo"
             t = read_table(f, size, 3, 2)
-        elif typ in {0x12, 0x13, 0x35, 0x36, 0x3a}:
+        elif typ in {0x12, 0x13, 0x3a}:
             typn = "longfuse"
             t = read_table(f, size, 17, 2)
+        elif typ in {0x35, 0x36}:
+            # GW5A newer-Gowin: 0x35/0x36 longfuse rows are width 14, not 17
+            # (empirically derived from FF-padding stride; 0x12/0x13/0x3a stay 17).
+            typn = "longfuse"
+            t = read_table(f, size, 14 if is_5_series else 17, 2)
         elif typ in {0x17, 0x18, 0x25, 0x28, 0x29, 0x2a, 0x2b, 0x2c, 0x2d, 0x2e, 0x2f}:
             typn = "longval"
             t = read_table(f, size, 28, 2)
