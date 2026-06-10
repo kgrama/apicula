@@ -743,6 +743,58 @@ def set_adc_attrs(db, idx, attrs):
     return fin_attrs
 
 # typ - PLL type (RPLL, etc)
+def _bpll_odiv_bits(base_col, n):
+    """High-aligned thermometer bits for ODIVk=n among the 7 cols base..base+6."""
+    log2 = max(0, int(n).bit_length() - 1)
+    return {base_col + c for c in range(log2, 7)}
+
+def set_bpll_attrs(db, row, col, attrs):
+    """GW5AST-138C bottom-edge PLL: emit fuzzed config bits as a set of
+    (tile_index, local_row, local_col), tile_index 0..3 == C146..C149.
+
+    Uses the STATIC, gw_sh-validated bit-table baked into the chipdb
+    (db.extra_func[(row, col)]['bpll']['bit_table']). NOT fuse_lookup.
+    """
+    attrs_upper(attrs)
+    bt = db.extra_func[row, col]['bpll']['bit_table']
+    prow = bt['row']
+
+    def geti(name, default):
+        if name not in attrs:
+            return default
+        v = attrs[name]
+        if isinstance(v, str):
+            v = v.strip()
+            return int(v, 2) if set(v) <= {'0', '1'} and len(v) > 1 else int(v)
+        return int(v)
+
+    def isen(name, default):
+        v = attrs.get(name, None)
+        if v is None:
+            return default
+        return str(v).upper() in ('TRUE', '1')
+
+    idiv = geti('IDIV_SEL', 1)
+    fbdiv = geti('FBDIV_SEL', 1)
+    mdiv = geti('MDIV_SEL', 16)
+    key = f'{idiv},{fbdiv},{mdiv}'
+    if key not in bt['div_table']:
+        raise Exception(f"BPLL divider tuple ({idiv},{fbdiv},{mdiv}) not in "
+                        f"fuzzed bit-table; add a gw_sh-measured entry")
+    bits = set()
+    for c in bt['div_table'][key]:
+        bits.add((0, prow, c))
+    for k in range(7):
+        if not isen(f'CLKOUT{k}_EN', k == 0):
+            continue
+        n = geti(f'ODIV{k}_SEL', 8)
+        ti, base = bt['odiv_therm'][str(k)]
+        for c in _bpll_odiv_bits(base, n):
+            bits.add((ti, prow, c))
+        eti, ecol = bt['clkout_en_col'][str(k)]
+        bits.add((eti, prow, ecol))
+    return bits
+
 def set_pll_attrs(db, typ, idx, attrs):
     attrs_upper(attrs)
     if typ not in {'RPLL', 'PLLVR', 'PLLA'}:
@@ -3841,6 +3893,14 @@ def place(db, tilemap, bels, cst, args, slice_attrvals, extra_slots):
             cfg_tile = tilemap[(0, 37)]
             for r, c in bits:
                 cfg_tile[r][c] = 1
+        elif typ == 'PLL':
+            # GW5AST-138C bottom-edge PLL. Config bits come from the static
+            # gw_sh-validated bit-table baked into the chipdb (NOT fuse_lookup).
+            bpll = db.extra_func[row - 1, col - 1]['bpll']
+            bits = set_bpll_attrs(db, row - 1, col - 1, parms)
+            for ti, brow, bcol in bits:
+                trow, tcol = bpll['tiles'][ti]
+                tilemap[(trow, tcol)][brow][bcol] = 1
         elif typ == 'DLLDLY':
             dlldly_attrs = set_dlldly_attrs(db, typ, parms, cell)
             for dlldly_row, dlldly_col in db.extra_func[row - 1, col -1]['dlldly_fusebels']:

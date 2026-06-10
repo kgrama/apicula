@@ -437,6 +437,7 @@ def main():
 
     pad_locs = pindef.get_pll_pads_locs(params['device'], params['package'])
     chipdb.pll_pads(db, device, pad_locs)
+    chipdb.fill_bottom_pll_pads(db, device)
 
     chipdb.dat_portmap(dat, db, device)
     chipdb.add_hclk_bels(dat, db, device)

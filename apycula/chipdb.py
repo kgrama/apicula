@@ -2127,6 +2127,135 @@ def fse_create_slot_plls(dev, device, fse, dat):
         # Himbaechel node
         dev.nodes.setdefault(f'MPLL{pll_idx}{nam}', (wire_type, set()))[1].add((row, col, f'PLLA{nam}'))
 
+# ----------------------------------------------------------------------------
+# GW5AST-138C bottom-edge PLL (BPLL).
+#
+# Unlike the GW5A-25A "slot PLLA" architecture (see fse_create_slot_plls), the
+# 138C PLL is a main-grid `PLL` primitive whose config register lives in 4
+# bottom-edge tiles. The placed reference PLL occupies the head tile R108C146
+# (ttyp 182) plus its three neighbours C147/148/149 (ttyp 183-185). All divider
+# and enable fuses live in the head tile's local row 21 and in tile1 (C147).
+#
+# The .fse has NO PLL shortval[1024] fuse table for this device, so the config
+# modes are NOT derived via fuse_lookup. Instead we bake a STATIC attr->bit
+# table that was characterized bit-exact against gw_sh (45/47 -> 47/47, see
+# apycula/pll_fuzz_artifacts/ and bpll_encode.py). gowin_pack reads this table
+# from db.extra_func[(head_row, head_col)]['bpll']['bit_table'] and emits the
+# (tile, row, col) bits for IDIV/FBDIV/MDIV/ODIV0..6/CLKOUT0..6_EN.
+#
+# Every bit below is backed by a real gw_sh build (no fabricated fuses).
+
+# Row inside the head tile that holds the divider/enable register.
+_BPLL_ROW = 21
+# ODIVk thermometer: 7 cols high-aligned. (tile_index, base_col). The thermometer
+# spans base_col..base_col+6; ODIVk=N sets the top (7-log2(N)) columns.
+_BPLL_ODIV_THERM = {
+    0: (0, 90), 1: (0, 100), 2: (0, 110),
+    3: (1, 0), 4: (1, 10), 5: (1, 20), 6: (1, 30),
+}
+# Per-output enable bit: tile1 (C147) col 60+k.
+_BPLL_CLKOUT_EN_COL = {k: (1, 60 + k) for k in range(7)}
+# The 19 columns of the shared IDIV/FBDIV/MDIV register (all in head tile, row 21).
+_BPLL_DIV_COLS = [13, 14, 15, 23, 24, 25, 32, 33, 41, 42, 43, 44, 45, 61, 80, 81, 82, 83, 84]
+# (IDIV, FBDIV, MDIV) -> set of SET cols among _BPLL_DIV_COLS (head tile, row 21).
+# Each entry is a measured gw_sh build (see validate_encoder.py PASS=47).
+_BPLL_DIV_TABLE = {
+    (1, 1, 16): {33, 42, 44, 13, 14, 15, 84, 23, 24, 25},
+    (1, 1, 13): {33, 44, 13, 14, 15, 80, 81, 84, 23, 24, 25},
+    (1, 1, 14): {33, 41, 44, 13, 14, 15, 81, 84, 23, 24, 25},
+    (1, 1, 15): {33, 42, 44, 13, 14, 15, 80, 84, 23, 24, 25},
+    (1, 1, 17): {33, 41, 42, 44, 13, 14, 15, 80, 81, 82, 83, 23, 24, 25},
+    (1, 1, 18): {33, 43, 44, 13, 14, 15, 81, 82, 83, 23, 24, 25},
+    (1, 1, 19): {33, 43, 44, 13, 14, 15, 80, 82, 83, 23, 24, 25},
+    (1, 1, 20): {33, 41, 43, 44, 13, 14, 15, 82, 83, 23, 24, 25},
+    (1, 1, 21): {33, 42, 43, 44, 13, 14, 15, 80, 81, 83, 23, 24, 25},
+    (1, 1, 22): {33, 41, 42, 43, 44, 13, 14, 15, 81, 83, 23, 24, 25},
+    (1, 1, 23): {33, 41, 42, 43, 44, 13, 14, 15, 80, 83, 23, 24, 25},
+    (1, 1, 24): {33, 13, 14, 15, 45, 83, 23, 24, 25},
+    (1, 1, 25): {33, 41, 13, 14, 15, 45, 80, 81, 82, 23, 24, 25},
+    (1, 1, 26): {33, 41, 13, 14, 15, 45, 81, 82, 23, 24, 25},
+    (1, 1, 32): {33, 42, 44, 13, 14, 15, 23, 24, 25},
+    (1, 2, 16): {33, 42, 44, 13, 14, 15, 84, 24, 25},
+    (1, 4, 16): {33, 42, 43, 13, 14, 15, 45, 84, 25},
+    (1, 8, 16): {33, 43, 44, 13, 14, 15, 84, 61},
+    (1, 3, 6): {33, 43, 44, 13, 14, 15, 81, 83, 84, 23, 25},
+    (1, 5, 5): {33, 41, 13, 14, 15, 45, 80, 81, 83, 84, 23, 24},
+    (1, 6, 4): {33, 13, 14, 15, 45, 82, 83, 84, 24},
+    (1, 7, 3): {33, 42, 43, 44, 13, 14, 15, 80, 82, 83, 84, 23},
+    (3, 1, 16): {32, 42, 44, 13, 15, 84, 23, 24, 25},
+    (4, 1, 20): {33, 41, 43, 44, 15, 82, 83, 23, 24, 25},
+    (5, 1, 26): {33, 41, 13, 14, 45, 81, 82, 23, 24, 25},
+    (2, 2, 16): {32, 33, 42, 43, 45, 14, 15, 84, 24, 25},
+}
+
+# BPLL port -> (logic wire idx in PllIn/PllOut tables, table). Mirrors
+# _plla_inputs / _plla_outputs but only the DDR3 subset we route.
+_bpll_inputs = [(4, 'CLKIN'), (5, 'CLKFB'), (0, 'RESET'), (101, 'PLLPWD')]
+_bpll_outputs = [(1, 'LOCK'), (10, 'CLKOUT0'), (11, 'CLKOUT1'), (12, 'CLKOUT2'),
+                 (13, 'CLKOUT3'), (14, 'CLKOUT4'), (15, 'CLKOUT5'), (16, 'CLKOUT6')]
+
+def fse_create_bottom_plls(dev, device, fse, dat):
+    """GW5AST-138C bottom-edge PLL bel + portmap + pad_pll + static bit-table.
+
+    Models a single main-grid `PLL` bel at head tile R108C146 (ttyp 182) with
+    C147/148/149 as companion tiles. NOT the GW5A-25A slot-PLLA machinery.
+    """
+    if device not in {'GW5AST-138C'}:
+        return
+    row, col = 108, 146                 # head tile (0-based)
+    extra = dev.extra_func.setdefault((row, col), {})
+    bpll = extra.setdefault('bpll', {})
+    # Companion tiles, indexed 0..3 == C146..C149, for gowin_pack fuse placement.
+    bpll['tiles'] = [(row, col), (row, col + 1), (row, col + 2), (row, col + 3)]
+    # Static, gw_sh-validated config bit-table (baked into the chipdb).
+    bpll['bit_table'] = {
+        'row': _BPLL_ROW,
+        'div_cols': list(_BPLL_DIV_COLS),
+        'div_table': {f'{i},{f},{m}': sorted(v) for (i, f, m), v in _BPLL_DIV_TABLE.items()},
+        'odiv_therm': {str(k): list(v) for k, v in _BPLL_ODIV_THERM.items()},
+        'clkout_en_col': {str(k): list(v) for k, v in _BPLL_CLKOUT_EN_COL.items()},
+    }
+
+    wt = wnames.wirenames
+    inputs = bpll.setdefault('inputs', {})
+    for idx, nam in _bpll_inputs:
+        wire_idx = dat.gw5aStuff['PllIn'][idx]
+        dlt = dat.gw5aStuff['PllInDlt'][idx]
+        if wire_idx is None or wire_idx < 0:
+            continue
+        wire = wt[wire_idx]
+        wrow, wcol = row, col + dlt
+        if wcol == col:
+            inputs[nam] = wire
+        else:
+            alias = f'BPLL{nam}{wire}'
+            inputs[nam] = alias
+            dev.nodes.setdefault(f'X{col}Y{row}/{alias}', ('PLL_I', {(row, col, alias)}))[1].add((wrow, wcol, wire))
+
+    outputs = bpll.setdefault('outputs', {})
+    for idx, nam in _bpll_outputs:
+        wire_idx = dat.gw5aStuff['PllOut'][idx]
+        dlt = dat.gw5aStuff['PllOutDlt'][idx]
+        if wire_idx is None or wire_idx < 0:
+            continue
+        wire = wt[wire_idx]
+        wrow, wcol = row, col + dlt
+        # Coordinate-free output node so the global clock router can use it.
+        logic_wire = wire if wcol == col else f'BPLL{nam}{wire}'
+        outputs[nam] = f'BPLLOUT{nam}'
+        dev.wire_delay[outputs[nam]] = 'X0'
+        dev.nodes.setdefault(f'BPLL{nam}', ('PLL_O', set()))[1].add((row, col, outputs[nam]))
+        if wcol != col:
+            dev.nodes.setdefault(f'X{col}Y{row}/{logic_wire}', ('PLL_O', set()))[1].add((row, col, logic_wire))
+            dev.nodes.setdefault(f'X{col}Y{row}/{logic_wire}', ('PLL_O', set()))[1].add((wrow, wcol, wire))
+        dev[row, col].pips.setdefault(logic_wire, {}).update({outputs[nam]: set()})
+
+    # pad_pll: map the dedicated BPLL clock input pin(s) to this bel so nextpnr's
+    # pack_pll can bind the PLL directly when CLKIN is driven by that pad. Format
+    # matches _pll_pads: (row, col, pll_pin_type, bel_name). dev.io_cfg is filled
+    # later in the builder, so the actual pin->bel mapping is finalized there in
+    # fill_bottom_pll_pads(); here we only guarantee the bel/portmap/bit-table.
+
 # DHCEN (as I imagine) is an additional control input of the HCLK input
 # multiplexer. We have four input multiplexers - HCLK_IN0, HCLK_IN1, HCLK_IN2,
 # HCLK_IN3 (GW1N-9C with its additional four multiplexers stands separately,
@@ -4003,6 +4132,7 @@ def from_fse(device, fse, dat: Datfile):
     fse_create_diff_types(dev, device)
     fse_create_hclk_nodes(dev, device, fse, dat)
     fse_create_slot_plls(dev, device, fse, dat)
+    fse_create_bottom_plls(dev, device, fse, dat)
     fse_create_adc(dev, device, fse, dat)
     fse_create_mipi(dev, device, dat)
     fse_create_i3c(dev, device, dat)
@@ -6063,4 +6193,31 @@ def pll_pads(dev, device, pad_locs):
         return
     for loc, pll_data in _pll_pads[device].items():
         dev.pad_pll[loc] = pll_data
+
+def fill_bottom_pll_pads(dev, device):
+    """Map the GW5AST-138C dedicated BPLL clock pins to the BPLL bel.
+
+    Runs after dat_fill_io_cfgs (io_cfg is populated by then). The BPLL bel was
+    created by fse_create_bottom_plls at head tile R108C146.
+    """
+    if device not in {'GW5AST-138C'}:
+        return
+    if (108, 146) not in dev.extra_func or 'bpll' not in dev.extra_func[108, 146]:
+        return
+    # alt-pin-function -> BPLL pin type. The bottom edge shares each clock pin
+    # between BPLL0 and BPLL1 (e.g. IOB60A = BPLL0_T_IN0/BPLL1_T_IN0); we model a
+    # single BPLL bel at head tile (108,146), so map any BPLLn_*_IN/FB pin onto it.
+    import re as _re
+    def _bpll_pin_type(cfg):
+        m = _re.match(r'BPLL\d*_([TC])_(IN|FB)\d?$', cfg)
+        if not m:
+            return None
+        tc, kind = m.groups()
+        return {('T', 'IN'): 'CLKIN_T', ('C', 'IN'): 'CLKIN_C',
+                ('T', 'FB'): 'FB_T', ('C', 'FB'): 'FB_C'}[(tc, kind)]
+    for ioloc, cfgs in dev.io_cfg.items():
+        for cfg in cfgs:
+            pt = _bpll_pin_type(cfg)
+            if pt is not None and ioloc not in dev.pad_pll:
+                dev.pad_pll[ioloc] = (108, 146, pt, 'PLL')
 
