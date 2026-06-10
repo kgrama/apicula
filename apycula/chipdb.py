@@ -2028,6 +2028,13 @@ def fse_create_adc(dev, device, fse, dat):
 # example, slot 6 is the left PLL, slot 8 is the lower PLL.
 # Only the slots that are used are added to the binary image.
 def fse_create_slot_plls(dev, device, fse, dat):
+    # NOTE: GW5AST-138C is intentionally NOT handled here. It does NOT use the
+    # GW5A-25A "slot PLLA" architecture: its PLL primitive is `PLL` (not `PLLA`),
+    # it has 12 BPLL instances (vs 6 PLLA slots), a 109x182 grid (vs 37x92), and
+    # its .dat per-corner PLL routing tables (PllLT/LB/RT/RB Ins/Outs) are all
+    # 0xFFFF-sentinel (empty) while the .fse lacks the shortval[1024] DRP fuse
+    # table. Un-gating to 138C here only crashes (KeyError on wirenames[-1]).
+    # A working 138C PLL needs a new BPLL model, not this 25A machinery.
     if device not in {"GW5A-25A"}:
         return
     for row, col, slot_idx, io_table in {(27, 0, 6, 'PllLB'), (27, 91, 2, 'PllRB'), (0, 0, 5, 'PllLT'), (0, 91, 3, 'PllRT'), (0, 45, 4, 'old_style'), (36, 45, 8, 'old_style')}:
