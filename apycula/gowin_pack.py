@@ -3170,7 +3170,8 @@ def set_iologic_fclk(in_attrs, attrs, param, out = True):
                 in_attrs['CLKIDDRMUX_ECLK'] = 'ECLK0'
     else:
         if out:
-            if param['IOLOGIC_FCLK'] != 'UNKNOWN':
+            # don't clobber a MEM-mode TCLK source (DQSW/DQSW270) set earlier
+            if param['IOLOGIC_FCLK'] != 'UNKNOWN' and 'WRFCLKSEL' not in in_attrs:
                 in_attrs['WRFCLKSEL'] = 'UNK102'
             if param['IOLOGIC_FCLK'] == 'SPINE10':
                 in_attrs['FCLKSEL0'] = 'HCLK0'
@@ -3231,8 +3232,10 @@ def set_iologic_attrs(db, attrs, param):
             in_attrs['ISI'] = 'ENABLE'
         if attrs['OUTMODE'] in {'MODDRX1', 'MODDRX2', 'MODDRX4'}:
             # OSER*_MEM (GW5A): the _MEM part is the TCLK source mux
-            # (DQS write-path clock), measured on GW5AST-138C
-            in_attrs['WRFCLKSEL'] = str(param.get('TCLK_SOURCE', 'DQSW')).strip('"').upper()
+            # (DQS write-path clock), measured on GW5AST-138C. TCLK_SOURCE
+            # arrives as a passed-through cell parameter.
+            tclk_src = in_attrs.pop('TCLK_SOURCE', None) or param.get('TCLK_SOURCE', 'DQSW')
+            in_attrs['WRFCLKSEL'] = str(tclk_src).strip('"').upper()
         in_attrs['LSRIMUX_0'] = '0'
         in_attrs['CLKOMUX'] = 'ENABLE'
         # in_attrs['LSRMUX_LSR'] = 'INV'
@@ -3594,7 +3597,8 @@ def place(db, tilemap, bels, cst, args, slice_attrvals, extra_slots):
             typ = 'IOB'
 
         if typ in {'IOLOGIC', 'IOLOGICI', 'IOLOGICO', 'IOLOGIC_DUMMY', 'ODDR', 'ODDRC', 'OSER4',
-                   'OSER8', 'OSER10', 'OVIDEO', 'IDDR', 'IDDRC', 'IDES4', 'IDES8', 'IDES10', 'IVIDEO',
+                   'OSER8', 'OSER8_MEM', 'OSER10', 'OVIDEO', 'IDDR', 'IDDRC', 'IDES4', 'IDES8',
+                   'IDES8_MEM', 'IDES10', 'IVIDEO',
                    'IOLOGICI_EMPTY', 'IOLOGICO_EMPTY'}:
             if num[-1] in {'I', 'O'}:
                 num = num[:-1]
