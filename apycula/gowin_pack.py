@@ -4006,6 +4006,10 @@ def place(db, tilemap, bels, cst, args, slice_attrvals, extra_slots):
                     raise Exception(f"Differential IO cant be placed at special row {iob.pos[0]}")
 
             if iob.flags['mode'] in {'IBUF', 'IOBUF', 'TLVDS_IBUF', 'TLVDS_IOBUF', 'ELVDS_IBUF', 'ELVDS_IOBUF'}:
+                if device.startswith('GW5') and iob.attrs['IO_TYPE'].startswith(('SSTL', 'HSTL')):
+                    print(f"WARNING: {iob_name}: {iob.attrs['IO_TYPE']} fuse emission is "
+                          f"INCOMPLETE on {device} (IOB attr/val ids not yet calibrated) - "
+                          f"drive/termination will be wrong on silicon")
                 iob.attrs['IO_TYPE'] = get_iostd_alias(iob.attrs['IO_TYPE'])
                 if iob.attrs.get('SINGLERESISTOR', 'OFF') != 'OFF':
                     iob.attrs['DDR_DYNTERM'] = 'ON'
@@ -4013,14 +4017,20 @@ def place(db, tilemap, bels, cst, args, slice_attrvals, extra_slots):
                 if iob.flags['mode'] in {'ELVDS_OBUF', 'ELVDS_IOBUF'}:
                     in_bank_attrs['BANK_VCCIO'] = '1.2'
 
+                # IO_TYPE may already be collapsed to a voltage-ambiguous
+                # alias (e.g. SSTL15 -> SSTL for the input fuse tables); for
+                # those, trust the declared BANK_VCCIO instead of the map.
+                _vccio_req = _vcc_ios.get(iob.attrs['IO_TYPE'])
                 if 'BANK_VCCIO' in iob.attrs:
-                    if iob.attrs['BANK_VCCIO'] != _vcc_ios[iob.attrs['IO_TYPE']]:
+                    if _vccio_req is not None and iob.attrs['BANK_VCCIO'] != _vccio_req:
                         raise Exception(f"Conflict bank VCC at {iob_name}.")
+                    if _vccio_req is None:
+                        _vccio_req = iob.attrs['BANK_VCCIO']
                 if not vccio:
                     if not (iob.attrs['IO_TYPE'].startswith('LVDS') or is_ram_pin(db, row, col, num)):
                         iostd = iob.attrs['IO_TYPE']
-                        vccio = _vcc_ios[iostd]
-                elif vccio != _vcc_ios[iob.attrs['IO_TYPE']] and not iob.attrs['IO_TYPE'].startswith('LVDS'):
+                        vccio = _vccio_req if _vccio_req is not None else _vcc_ios[iostd]
+                elif _vccio_req is not None and vccio != _vccio_req and not iob.attrs['IO_TYPE'].startswith('LVDS'):
                     snd_type = iob.attrs['IO_TYPE']
                     fst = [name for name, iob in ios.items() if iob.attrs['IO_TYPE'] == iostd][0]
                     snd = iob_name
@@ -4033,9 +4043,12 @@ def place(db, tilemap, bels, cst, args, slice_attrvals, extra_slots):
                 iostd = 'LVCMOS33'
 
         if 'BANK_VCCIO' not in in_bank_attrs:
-            in_bank_attrs['BANK_VCCIO'] = _vcc_ios[iostd]
+            # iostd may be a voltage-ambiguous alias (e.g. SSTL); prefer the
+            # voltage already resolved from the cst BANK_VCCIO declarations
+            in_bank_attrs['BANK_VCCIO'] = vccio if vccio else _vcc_ios[iostd]
 
         _banks[bank].iostd = iostd
+        _banks[bank].vccio = vccio  # resolved voltage (iostd alias may be ambiguous)
 
         # set io bits
         for name, iob in ios.items():
@@ -4227,7 +4240,8 @@ def place(db, tilemap, bels, cst, args, slice_attrvals, extra_slots):
                 if k not in attrids.iob_attrids:
                     print(f'XXX BANK: add {k} key handle')
                 else:
-                    add_attr_val(db, 'IOB', bank_attrs, attrids.iob_attrids['BANK_VCCIO'], attrids.iob_attrvals[_vcc_ios[io_std]])
+                    add_attr_val(db, 'IOB', bank_attrs, attrids.iob_attrids['BANK_VCCIO'],
+                                 attrids.iob_attrvals[getattr(_banks[bank], 'vccio', None) or _vcc_ios[io_std]])
 
             bits = get_bank_fuses(db, tiledata.ttyp, bank_attrs, 'BANK', bank)
             bits.update(get_bank_io_fuses(db, tiledata.ttyp, bank_attrs))
@@ -4237,7 +4251,7 @@ def place(db, tilemap, bels, cst, args, slice_attrvals, extra_slots):
                 btile[row][col] = 1
 
         io_std = _banks[bank].iostd
-        attrs.update({'IO_TYPE': io_std, 'BANK_VCCIO': _vcc_ios[io_std]})
+        attrs.update({'IO_TYPE': io_std, 'BANK_VCCIO': getattr(_banks[bank], 'vccio', None) or _vcc_ios[io_std]})
 
         if device in {'GW5A-25A', 'GW5AST-138C'}:
             attrs.update({'OPENDRAIN': 'OFF'})
