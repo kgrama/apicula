@@ -3196,10 +3196,14 @@ def set_iologic_fclk(in_attrs, attrs, param, out = True):
         else:
             if in_attrs['INMODE'] == 'DDRENABLE':
                 return
+            # GW5A input-side FCLK mux (val ids measured on GW5AST-138C; the
+            # FCLKSEL6+FCLKSEL7 pair fuse selects even/odd line group, the
+            # original names HCLK0_/HCLK2_ etc have no GW5A logicinfo codes
+            # and were silently dropped -> frozen IDES capture clock)
             if param['IOLOGIC_FCLK'] == 'SPINE10':
                 in_attrs['FCLKSEL5'] = 'HCLK0'
                 in_attrs['FCLKSEL6'] = 'HCLK0'
-                in_attrs['FCLKSEL7'] = 'HCLK0_'
+                in_attrs['FCLKSEL7'] = 'HCLK2'
                 in_attrs['FCLKSEL3'] = 'HCLK0'
             elif param['IOLOGIC_FCLK'] == 'SPINE11':
                 in_attrs['FCLKSEL5'] = 'HCLK1'
@@ -3207,15 +3211,15 @@ def set_iologic_fclk(in_attrs, attrs, param, out = True):
                 in_attrs['FCLKSEL7'] = 'HCLK1_'
                 in_attrs['FCLKSEL4'] = 'HCLK1'
             elif param['IOLOGIC_FCLK'] == 'SPINE12':
-                in_attrs['FCLKSEL5'] = 'HCLK2'
-                in_attrs['FCLKSEL6'] = 'HCLK2'
-                in_attrs['FCLKSEL7'] = 'HCLK2_'
-                in_attrs['FCLKSEL3'] = 'HCLK2'
+                in_attrs['FCLKSEL5'] = 'UNK83'
+                in_attrs['FCLKSEL6'] = 'HCLK0'
+                in_attrs['FCLKSEL7'] = 'HCLK2'
+                in_attrs['FCLKSEL3'] = 'HCLK0_'
             elif param['IOLOGIC_FCLK'] == 'SPINE13':
                 in_attrs['FCLKSEL5'] = 'HCLK3'
                 in_attrs['FCLKSEL6'] = 'HCLK3'
                 in_attrs['FCLKSEL7'] = 'HCLK3_'
-                in_attrs['FCLKSEL4'] = 'HCLK3'
+                in_attrs['FCLKSEL4'] = 'HCLK1_'
 
 def set_iologic_attrs(db, attrs, param):
     def set_pre5a_out_attrs():
