@@ -21,3 +21,4 @@ generic/blinky.posp
 generic/blinky.vm
 .vscode
 pll_fuzz_artifacts/
+serdes_fuzz_artifacts/

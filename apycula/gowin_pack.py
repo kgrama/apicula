@@ -3082,11 +3082,13 @@ _iologic_default_attrs = {
         'ODDRC': { 'TXCLK_POL': '0'},
         'OSER4': { 'GSREN': 'FALSE', 'LSREN': 'TRUE', 'TXCLK_POL': '0', 'HWL': 'FALSE'},
         'OSER8': { 'GSREN': 'FALSE', 'LSREN': 'TRUE', 'TXCLK_POL': '0', 'HWL': 'FALSE'},
+        'OSER8_MEM': { 'GSREN': 'FALSE', 'LSREN': 'TRUE', 'TXCLK_POL': '0', 'HWL': 'FALSE'},
         'OSER10': { 'GSREN': 'FALSE', 'LSREN': 'TRUE'},
         'OSER16': { 'GSREN': 'FALSE', 'LSREN': 'TRUE', 'CLKOMUX': 'ENABLE'},
         'OVIDEO': { 'GSREN': 'FALSE', 'LSREN': 'TRUE'},
         'IDES4': { 'GSREN': 'FALSE', 'LSREN': 'TRUE'},
         'IDES8': { 'GSREN': 'FALSE', 'LSREN': 'TRUE'},
+        'IDES8_MEM': { 'GSREN': 'FALSE', 'LSREN': 'TRUE'},
         'IDES10': { 'GSREN': 'FALSE', 'LSREN': 'TRUE'},
         'IVIDEO': { 'GSREN': 'FALSE', 'LSREN': 'TRUE'},
         'IDDR' :  {'CLKIMUX': 'ENABLE', 'LSRIMUX_0': '0', 'LSROMUX_0': '0'},
@@ -3102,16 +3104,26 @@ _iologic_5a_default_attrs = {
 
 def iologic_mod_attrs(attrs):
     attrs_upper(attrs)
+    # GW5A keeps the literal TXCLK_POL/HWL fuse names (measured on
+    # GW5AST-138C); older families encode them as TSHX/UPDATE
+    is_gw5 = device.startswith('GW5')
     if 'TXCLK_POL' in attrs:
-        if int(attrs['TXCLK_POL']) == 0:
-            attrs['TSHX'] = 'SIG'
+        if is_gw5:
+            attrs['TXCLK_POL'] = '1' if int(attrs['TXCLK_POL']) else '0'
         else:
-            attrs['TSHX'] = 'INV'
-        del attrs['TXCLK_POL']
+            if int(attrs['TXCLK_POL']) == 0:
+                attrs['TSHX'] = 'SIG'
+            else:
+                attrs['TSHX'] = 'INV'
+            del attrs['TXCLK_POL']
     if 'HWL' in attrs:
-        if attrs['HWL'] == 'TRUE':
-            attrs['UPDATE'] = 'SAME'
-        del attrs['HWL']
+        if is_gw5:
+            if attrs['HWL'] != 'TRUE': # only TRUE has a fuse
+                del attrs['HWL']
+        else:
+            if attrs['HWL'] == 'TRUE':
+                attrs['UPDATE'] = 'SAME'
+            del attrs['HWL']
     if 'GSREN' in attrs:
         if attrs['GSREN'] == 'TRUE':
             attrs['GSR'] = 'ENGSR'
@@ -3217,6 +3229,10 @@ def set_iologic_attrs(db, attrs, param):
             in_attrs['ISI'] = 'ENABLE'
         if attrs['OUTMODE'] == 'DDRENABLE':
             in_attrs['ISI'] = 'ENABLE'
+        if attrs['OUTMODE'] in {'MODDRX1', 'MODDRX2', 'MODDRX4'}:
+            # OSER*_MEM (GW5A): the _MEM part is the TCLK source mux
+            # (DQS write-path clock), measured on GW5AST-138C
+            in_attrs['WRFCLKSEL'] = str(param.get('TCLK_SOURCE', 'DQSW')).strip('"').upper()
         in_attrs['LSRIMUX_0'] = '0'
         in_attrs['CLKOMUX'] = 'ENABLE'
         # in_attrs['LSRMUX_LSR'] = 'INV'
@@ -3234,6 +3250,11 @@ def set_iologic_attrs(db, attrs, param):
                 in_attrs['ISI'] = 'ENABLE'
             if attrs['INMODE'] == 'DDRENABLE':
                 in_attrs['ISI'] = 'ENABLE'
+            if attrs['INMODE'] in {'MIDDRX1', 'MIDDRX2', 'MIDDRX4'}:
+                # IDES*_MEM (GW5A): FIFO + DQSR90 read clock mux,
+                # measured on GW5AST-138C
+                in_attrs['FIFO'] = 'ENABLE'
+                in_attrs['IOLOGIC_UNKNOWN112'] = 'DQR90'
             in_attrs['LSROMUX_0'] = '0'
             in_attrs['CLKIMUX'] = 'ENABLE'
         return
@@ -3250,6 +3271,12 @@ def set_iologic_attrs(db, attrs, param):
         if in_attrs['OUTMODE'] in {'ODDRX1', 'ODDRX2', 'ODDRX4'}:
             in_attrs['CLKOMUX'] = 'ENABLE'
             in_attrs['OCLKCE'] = 'CE'
+        elif in_attrs['OUTMODE'] in {'MODDRX1', 'MODDRX2', 'MODDRX4'}: # OSER*_MEM
+            # measured on GW5AST-138C: mode bits as ODDRXn, the _MEM part is
+            # the TCLK source mux (DQS write-path clocks)
+            in_attrs['CLKOMUX'] = 'ENABLE'
+            in_attrs['OCLKCE'] = 'CE'
+            in_attrs['WRFCLKSEL'] = str(param.get('TCLK_SOURCE', 'DQSW')).strip('"')
         elif in_attrs['OUTMODE'] in {'ODDRX5'}: # main cell
             in_attrs['HWL'] = 'TRUE'
             in_attrs['CLKOMUX'] = 'ENABLE'
@@ -3279,6 +3306,12 @@ def set_iologic_attrs(db, attrs, param):
         in_attrs['LSRMUX_LSR'] = 'SIG'
         if in_attrs['INMODE'] in {'IDDRX1', 'IDDRX2', 'IDDRX4', 'IDDRX5'}:
             in_attrs['CLKIMUX'] = 'ENABLE'
+        elif in_attrs['INMODE'] in {'MIDDRX1', 'MIDDRX2', 'MIDDRX4'}: # IDES*_MEM
+            # measured on GW5AST-138C: MIDDRXn table entry carries INDEL; FIFO
+            # and the DQSR90 read clock mux are set separately
+            in_attrs['CLKIMUX'] = 'ENABLE'
+            in_attrs['FIFO'] = 'ENABLE'
+            in_attrs['IOLOGIC_UNKNOWN112'] = 'DQR90'
         elif in_attrs['INMODE'] == 'VIDEORX':
             in_attrs['INMODE'] = 'LVDSIN'
             in_attrs['CLKIMUX'] = 'ENABLE'
@@ -4418,6 +4451,36 @@ def route(db, tilemap, pips):
         for row, col in bits:
             tile[row][col] = 1
 
+def insert_serdes_csr(db, csr_path):
+    """Bake a GTR12 SerDes CSR write list into the bitstream command header.
+
+    The Gowin loader replays UPAR register writes at configuration time: each
+    write is one 128-bit command line [0x3E<<56|data32][0x39<<56|addr24],
+    preceded by a single 0x36 command, placed right after the 0xD2 command.
+    Validated byte-exact against gw_sh GW5AST-138C SerDes bitstreams.
+    The csr file format is the IDE one: upar_write_driver(0xADDR,0xDATA) per line.
+    """
+    writes = []
+    with open(csr_path) as f:
+        for line in f:
+            m = re.match(r'\s*upar_write_driver\(0x([0-9a-fA-F]+)\s*,\s*0x([0-9a-fA-F]+)\)', line)
+            if m:
+                writes.append((int(m.group(1), 16), int(m.group(2), 16)))
+    if not writes:
+        raise Exception(f"serdes csr: no upar_write_driver entries found in {csr_path}")
+    pos = None
+    for i, e in enumerate(db.cmd_hdr):
+        if e[:1] == b'\xd2':
+            pos = i + 1
+            break
+    if pos is None:
+        raise Exception("serdes csr: 0xD2 command not found in bitstream header")
+    block = [bytearray.fromhex('36000000ffffffffffffffff')]
+    for addr, data in writes:
+        block.append(bytearray.fromhex(f'{0x3E << 56 | data:016x}{0x39 << 56 | addr:016x}'))
+    db.cmd_hdr[pos:pos] = block
+    print(f'serdes csr: baked {len(writes)} UPAR writes from {csr_path}')
+
 def header_footer(db, bs, compress):
     """
     Generate fs header and footer
@@ -4673,6 +4736,8 @@ def main():
     parser.add_argument('--reconfign_as_gpio', action = 'store_true')
     parser.add_argument('--cpu_as_gpio', action = 'store_true')
     parser.add_argument('--i2c_as_gpio', action = 'store_true')
+    parser.add_argument('--serdes_csr', default = None,
+            help = 'GTR12 SerDes CSR file (upar_write_driver list) to bake into the bitstream (GW5AST-138C)')
     if pil_available:
         parser.add_argument('--png')
 
@@ -4770,6 +4835,11 @@ def main():
 
     if device in {'GW5A-25A', 'GW5AST-138C'}:
         main_map = bitmatrix.transpose(main_map)
+
+    if args.serdes_csr:
+        if device != 'GW5AST-138C':
+            raise Exception("--serdes_csr is only supported for GW5AST-138C (GTR12)")
+        insert_serdes_csr(db, args.serdes_csr)
 
     header_footer(db, main_map, args.compress)
 
