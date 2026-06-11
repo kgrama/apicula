@@ -4170,6 +4170,13 @@ def place(db, tilemap, bels, cst, args, slice_attrvals, extra_slots):
                     #print(row, col, f'mode:{mode_for_attrs}, idx:{iob_idx}, {atr} = {iob_attrs}')
                     if mode_for_attrs in {'OBUF', 'IOBUF', 'TBUF'}:
                         add_attr_val(db, 'IOB', iob_attrs, attrids.iob_attrids['IOB_UNKNOWN51'], attrids.iob_attrvals['TRIMUX'])
+                        if mode_for_attrs == 'IOBUF' and iob.flags.get('USED_BY_IOLOGIC') \
+                           and iob.flags.get('NET_OEN') not in {'VCC', 'GND'}:
+                            # I/OEN wired internally to IOLOGIC (OSER drives,
+                            # IDES captures - the DDR DQ arrangement): tristate
+                            # and input enable come from the IOLOGIC TX path
+                            # (measured: gw_sh sets TRI_MUX val123, fuse (8,4))
+                            add_attr_val(db, 'IOB', iob_attrs, attrids.iob_attrids['TRI_MUX'], attrids.iob_attrvals['UNK123'])
                     elif mode_for_attrs == 'IBUF':
                         if 'HCLK' in iob.flags:
                             add_attr_val(db, 'IOB', iob_attrs, attrids.iob_attrids['IOB_UNKNOWN67'], attrids.iob_attrvals['UNKNOWN263'])
