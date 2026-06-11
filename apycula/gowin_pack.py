@@ -3947,6 +3947,9 @@ def place(db, tilemap, bels, cst, args, slice_attrvals, extra_slots):
             for ti, brow, bcol in bits:
                 trow, tcol = bpll['tiles'][ti]
                 tilemap[(trow, tcol)][brow][bcol] = 1
+            # V22 -> CLKIN delivery chain (gates/spine enables/entry taps)
+            for trow, tcol, brow, bcol in bpll['bit_table'].get('clkin_path', []):
+                tilemap[(trow, tcol)][brow][bcol] = 1
         elif typ == 'DLLDLY':
             dlldly_attrs = set_dlldly_attrs(db, typ, parms, cell)
             for dlldly_row, dlldly_col in db.extra_func[row - 1, col -1]['dlldly_fusebels']:
