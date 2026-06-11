@@ -1016,6 +1016,16 @@ def gw5_hclk_idx(dev, device, row, col):
         if col == 0:
             return 2
         return 3
+    if device == 'GW5AST-138C':
+        # 6 regions, no top-edge HCLK. Boundaries measured by moving a single
+        # OSER8 along the edges and diffing gw_sh bitstreams: left/right edges
+        # split at row 54, bottom edge at col 91.
+        if row == dev.rows - 1:
+            return 4 if col < 91 else 5
+        if col == 0:
+            return 0 if row < 54 else 1
+        if col == dev.cols - 1:
+            return 2 if row < 54 else 3
     return -1
 
 # Table 48 describes the HCLK wire connections, but the problem is that it also
@@ -1027,7 +1037,7 @@ def gw5_hclk_wire_offset(device):
     return {'GW5A-25A': 187, 'GW5AST-138C': 187}[device]
 
 def gw5_ihclk_wire_num(device):
-    return {'GW5A-25A': 65}[device]
+    return {'GW5A-25A': 65, 'GW5AST-138C': 40}[device]
 
 def gw5_get_num_of_hclks(device):
     if device == 'GW5A-25A':
@@ -1045,11 +1055,20 @@ def gw5_create_hclk_iol_pip(dev, device, row, col):
             return row not in {10, 18}
         if col == dev.cols - 1:
             return row not in {2, 10, 27}
+    if device == 'GW5AST-138C':
+        # all edge IO cells except the 6 HCLK control and 5 bridge cells
+        if row == dev.rows - 1:
+            return col not in {0, 64, 117, 118, 181}
+        if col in {0, dev.cols - 1}:
+            return row not in {27, 63, 81}
     return False
 
 def gw5_logic_to_hclk_wires(device):
     if device == 'GW5A-25A':
         return {0: (0, 64), 1: (36, 27), 2: (1, 0), 3: (34, 91)}
+    if device == 'GW5AST-138C':
+        return {0: (27, 0), 1: (81, 0), 2: (27, 181), 3: (81, 181),
+                4: (108, 64), 5: (108, 117)}
     return {}
 
 def make_hclk_pip(dev, hclk_idx, row, col, src, dest, fuses = set()):
@@ -1099,7 +1118,7 @@ def gw5_make_hclk_pips(dev, device, fse, dat: Datfile):
                                 src = wnames.hclknames[srcid + hclk_idx * hclk_off]
                                 dest = wnames.hclknames[destid + hclk_idx * hclk_off]
                                 mk_hclk_pip(hclk_idx, row, col, src, dest, fuses)
-                            elif srcid in range(hclk_off, hclk_off + 4 * ihclk_wire_num) and destid in range(hclk_off, hclk_off + 4 * ihclk_wire_num):
+                            elif device == 'GW5A-25A' and srcid in range(hclk_off, hclk_off + 4 * ihclk_wire_num) and destid in range(hclk_off, hclk_off + 4 * ihclk_wire_num):
                                 src = wnames.hclknames[srcid + 5 * hclk_off]
                                 dest = wnames.hclknames[destid + 5 * hclk_off]
                                 mk_hclk_pip('_IHCLK', row, col, src, dest, fuses)
@@ -1129,7 +1148,7 @@ def gw5_make_hclk_pips(dev, device, fse, dat: Datfile):
     # XXX This section will need to be modified for the 138C—it has more HCLKs
     row = 0
     col = 0
-    for hclk_idx in range(4):
+    for hclk_idx in range(gw5_get_num_of_hclks(device)):
         for j in range(4):
             # make pip HCLKxy <- HCLK_MUX_ALPHAxy
             src = f'HCLK_MUX_ALPHA{hclk_idx}{j}'
@@ -1169,7 +1188,7 @@ def gw5_make_hclk_pips(dev, device, fse, dat: Datfile):
 
 
     # Epsilon defaults
-    for i in range(4):
+    for i in range(gw5_get_num_of_hclks(device)):
         mk_hclk_pip(i, row, col, f'HCLK_MUX_EPSILON{i}0', f'HCLK_BUF_AI{i}0')
         mk_hclk_pip(i, row, col, f'HCLK_MUX_EPSILON{i}2', f'HCLK_BUF_AI{i}1')
         mk_hclk_pip(i, row, col, f'HCLK_MUX_EPSILON{i}4', f'HCLK_BUF_AI{i}2')
@@ -1881,9 +1900,12 @@ def add_hclk_bels(dat, dev, device):
 _global_wire_prefixes = {'PCLK', 'TBDHCLK', 'BBDHCLK', 'RBDHCLK', 'LBDHCLK',
                          'TLPLL', 'TRPLL', 'BLPLL', 'BRPLL'}
 def fse_create_hclk_nodes(dev, device, fse, dat: Datfile):
-    if device in {'GW5A-25A'}:
-        gw5_make_pin_to_hclk(dev)
-        gw5_make_hclk_to_clk_gates(dev, device, fse, dat)
+    if device in {'GW5A-25A', 'GW5AST-138C'}:
+        if device == 'GW5A-25A':
+            # pin/GCLK-gate entries are 25A-specific; on the 138C the FCLK
+            # enters each region via the L2HCLK aliases at the control cells
+            gw5_make_pin_to_hclk(dev)
+            gw5_make_hclk_to_clk_gates(dev, device, fse, dat)
         gw5_make_hclk_pips(dev, device, fse, dat)
         return
 
@@ -4054,6 +4076,7 @@ def set_chip_flags(dev, device):
         dev.chip_flags.append("HAS_PINCFG")
         dev.chip_flags.append("HAS_DFF67")
         dev.chip_flags.append("HAS_CIN_MUX")
+        dev.chip_flags.append("HAS_5A_HCLK")
         dev.chip_flags.append("NEED_BSRAM_RESET_FIX")
         dev.chip_flags.append("NEED_CFGPINS_INVERSION")
         dev.chip_flags.append("HAS_5A_DSP")
