@@ -788,6 +788,9 @@ def set_bpll_attrs(db, row, col, attrs):
         raise Exception(f"BPLL divider tuple ({idiv},{fbdiv},{mdiv}) not in "
                         f"fuzzed bit-table; add a gw_sh-measured entry")
     bits = set()
+    # static PLL power-up/base configuration (see _BPLL_BASE_BITS)
+    for tb in bt.get('base_bits', []):
+        bits.add((tb[0], tb[1], tb[2]))
     for c in bt['div_table'][key]:
         bits.add((0, prow, c))
     for k in range(7):
