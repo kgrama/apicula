@@ -744,9 +744,15 @@ def set_adc_attrs(db, idx, attrs):
 
 # typ - PLL type (RPLL, etc)
 def _bpll_odiv_bits(base_col, n):
-    """High-aligned thermometer bits for ODIVk=n among the 7 cols base..base+6."""
-    log2 = max(0, int(n).bit_length() - 1)
-    return {base_col + c for c in range(log2, 7)}
+    """ODIVk field bits among the 7 cols base..base+6.
+
+    The field holds the binary value (128 - ODIV) with col base+i = bit i
+    (measured: ODIV 8 -> 120, 25 -> 103, 26 -> 102; the original pow2-only
+    fuzz saw 128-2^k which looks like a high-aligned thermometer). Any
+    ODIV in 1..128 is encodable; pow2 values produce bit-identical fuses
+    to the previous thermometer model."""
+    v = 128 - int(n)
+    return {base_col + c for c in range(7) if (v >> c) & 1}
 
 def set_bpll_attrs(db, row, col, attrs):
     """GW5AST-138C bottom-edge PLL: emit fuzzed config bits as a set of
