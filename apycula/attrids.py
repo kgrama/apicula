@@ -79,6 +79,12 @@ iob_attrids = {
         }
 
 iob_attrvals = {
+        # GW5A TRI_MUX (tristate/input-enable mux source) val ids, measured on
+        # GW5AST-138C: UNK123 = IOLOGIC TX path (dual OSER+IDES pad),
+        # UNK82/UNK122 appear for fabric-driven pads with IOLOGIC input
+        'UNK82':   82,
+        'UNK122': 122,
+        'UNK123': 123,
             'UNKNOWN':          0, # possible a dummy value for line 0 in logicinfo?
             # standard
             'MIPI':             1,
