@@ -1732,6 +1732,10 @@ iologic_attrids = {
 
 iologic_attrvals = {
         'UNKNOWN':              0,
+        # GW5A FCLKSEL val ids with no pre-5A name (measured on GW5AST-138C):
+        # UNK83 = FCLKSEL5 line-2 select, UNK94 = FCLKSEL7 pair variant
+        'UNK83':               83,
+        'UNK94':               94,
         '0':                    1,
         '1':                    2,
         'INV':                  3,
