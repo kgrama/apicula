@@ -3967,11 +3967,25 @@ def place(db, tilemap, bels, cst, args, slice_attrvals, extra_slots):
             _, wire, _, side = db.extra_func[row - 1, col -1]['dhcen'][int(num)]['pip']
             hclk_attrs = find_and_set_dhcen_hclk_fuses(db, tilemap, wire, side)
         elif typ.startswith("CLKDIV"):
-            hclk_attrs = set_hclk_attrs(db, parms, num, typ, cellname)
-            bits = get_shortval_fuses(db, tiledata.ttyp, hclk_attrs, "HCLK")
-            #print(hclk_attrs, bits)
-            for r, c in bits:
-                tile[r][c] = 1
+            # GW5AST-138C: emit the DIV_MODE fuse from the clean-room measured
+            # one-hot table (chipdb 'divmode_fuses') rather than the shortval
+            # lookup, whose attrval table is unverified here and lacks 3/8.
+            ef = db.extra_func.get((row - 1, col - 1), {})
+            cd_bels = ef.get('clkdiv', {}).get('bels', {})
+            cd_bel = cd_bels.get(int(num[-1]), {}) if num and num[-1].isdigit() else {}
+            if device == 'GW5AST-138C' and typ == 'CLKDIV' and 'divmode_fuses' in cd_bel:
+                attrs_upper(parms)
+                dm = str(parms.get('DIV_MODE', '2'))
+                fuses = cd_bel['divmode_fuses'].get(dm)
+                if fuses is None:
+                    raise Exception(f"Unsupported CLKDIV DIV_MODE {dm} at {cellname}")
+                for r, c in fuses:
+                    tile[r][c] = 1
+            else:
+                hclk_attrs = set_hclk_attrs(db, parms, num, typ, cellname)
+                bits = get_shortval_fuses(db, tiledata.ttyp, hclk_attrs, "HCLK")
+                for r, c in bits:
+                    tile[r][c] = 1
         elif typ == 'DQCE':
             # Himbaechel only
             pipre = re.compile(r"X(\d+)Y(\d+)/([\w_]+)/([\w_]+)")
