@@ -1360,7 +1360,16 @@ def gw5_make_hclk_to_clk_gates(dev, device, fse, dat: Datfile):
 # The GW5A series has a different CLKDIV/CLKDIV2 configuration—each of the four
 # wires in a single HCLK block has its own dedicated CLKDIV/CLKDIV2. The inputs
 # for CLKDIV2 are HCLK_BUF_BO.
-_gw5a_hclk_locs = { 'GW5A-25A': { 0: (0, 64), 1: (36, 27), 2: (1, 0), 3: (34, 91)} }
+_gw5a_hclk_locs = {
+    'GW5A-25A': { 0: (0, 64), 1: (36, 27), 2: (1, 0), 3: (34, 91)},
+    # GW5AST-138C: the 6 HCLK control cells (same as gw5_logic_to_hclk_wires).
+    'GW5AST-138C': { 0: (27, 0), 1: (81, 0), 2: (27, 181), 3: (81, 181),
+                     4: (108, 64), 5: (108, 117)},
+}
+# CLKDIV DIV_MODE config fuses (GW5AST-138C), measured clean-room via gw_sh
+# oracle bitstream diffs (serdes_fuzz_artifacts/clkdiv_138c/): one-hot bits in
+# the HCLK control tile's local row 21.  DIV_MODE string -> column.
+_gw5ast_clkdiv_divmode_cols = {'2': 51, '3': 49, '3.5': 13, '4': 12, '5': 47, '8': 10}
 def gw5_add_hclk_bels(dat, dev, device):
     for hclk_idx, hclk_loc in _gw5a_hclk_locs[device].items():
         row, col = hclk_loc
@@ -1373,9 +1382,9 @@ def gw5_add_hclk_bels(dat, dev, device):
             # CLKDIV2
             dev.hclk_div2.setdefault(hclk_idx, set()).add((row, col, i))
             clkdiv2 = extra_clkdiv2.setdefault('bels', {}).setdefault(i, {})
-            # XXX not creating Bels — in this case, the creation of the CLKDIV
-            # mechanism for pre-5A chips in nextpnr will not be triggered
-            #dev[row, col].bels[f'CLKDIV2{i}'] = Bel()
+            # Create the Bel so nextpnr's CLKDIV mechanism triggers.  (Was
+            # commented out while only the wire graph existed.)
+            dev[row, col].bels[f'CLKDIV2{i}'] = Bel()
             portmap = clkdiv2.setdefault('inputs', {})
             portmap['RESETN'] = f'B{i + 2}'  # GW5A-25A 0-B2, 1-B3, 2-B4, 3-B5
             portmap['HCLKIN'] = f'CLKDIV2_HCLKIN{hclk_idx}{i}'
@@ -1395,6 +1404,7 @@ def gw5_add_hclk_bels(dat, dev, device):
 
             # CLKDIV
             clkdiv = extra_clkdiv.setdefault('bels', {}).setdefault(i, {})
+            dev[row, col].bels[f'CLKDIV{i}'] = Bel()
             portmap = clkdiv.setdefault('inputs', {})
             portmap['HCLKIN'] = f'CLKDIV_I{hclk_idx}{i}'
             portmap['RESETN'] = f'C{i + 4}'  # GW5A-25A 0-C4, 1-C5, 2-C6, 3-C7
@@ -1405,6 +1415,13 @@ def gw5_add_hclk_bels(dat, dev, device):
             portmap['CLKOUT'] = f'CLKDIV_O{hclk_idx}{i}'
             src = portmap['CLKOUT']
             add_node(dev, f'HCLK{hclk_idx}_{src}', "GLOBAL_CLK", row, col, src)
+
+            # DIV_MODE config fuses (GW5AST-138C, clean-room measured): one-hot
+            # column in the control tile's local row 21.  Stored per DIV_MODE so
+            # gowin_pack emits the right bit for the placed CLKDIV.
+            if device == 'GW5AST-138C':
+                clkdiv['divmode_fuses'] = {
+                    dm: {(21, c)} for dm, c in _gw5ast_clkdiv_divmode_cols.items()}
 
     return
 
@@ -1789,7 +1806,7 @@ def _iter_edge_coords(dev):
 
 def add_hclk_bels(dat, dev, device):
     #Stub for parts that don't have HCLK bel support yet
-    if device in {'GW5A-25A'}:
+    if device in {'GW5A-25A', 'GW5AST-138C'}:
         gw5_add_hclk_bels(dat, dev, device)
         return
     if device not in ("GW2A-18", "GW2A-18C", "GW1N-9", "GW1N-9C", "GW1N-1", "GW1NZ-1", "GW1NS-4", "GW1N-4"):
