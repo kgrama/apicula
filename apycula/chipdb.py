@@ -4188,7 +4188,7 @@ def set_chip_flags(dev, device):
     if device in {'GW1NZ-1'}:
         dev.chip_flags.append("HAS_BANDGAP")
     dev.chip_flags.append("HAS_PLL_HCLK")
-    if device in {'GW2A-18', 'GW2A-18C'}:
+    if device in {'GW2A-18', 'GW2A-18C', 'GW5AST-138C'}:
         dev.chip_flags.append("HAS_CLKDIV_HCLK")
     if device in {'GW5A-25A'}:
         dev.chip_flags.append("HAS_PINCFG")
