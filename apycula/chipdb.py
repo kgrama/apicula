@@ -1406,15 +1406,31 @@ def gw5_add_hclk_bels(dat, dev, device):
             clkdiv = extra_clkdiv.setdefault('bels', {}).setdefault(i, {})
             dev[row, col].bels[f'CLKDIV{i}'] = Bel()
             portmap = clkdiv.setdefault('inputs', {})
-            portmap['HCLKIN'] = f'CLKDIV_I{hclk_idx}{i}'
-            portmap['RESETN'] = f'C{i + 4}'  # GW5A-25A 0-C4, 1-C5, 2-C6, 3-C7
-            portmap['CALIB']  = ['B6', 'B7', 'C0', 'C1'][i]  # GW5A-25A
-            make_hclk_pip(dev, hclk_idx, row, col, f'HCLK_MUX_ALPHA{hclk_idx}{i}', portmap['HCLKIN'])
-
-            portmap = clkdiv.setdefault('outputs', {})
-            portmap['CLKOUT'] = f'CLKDIV_O{hclk_idx}{i}'
-            src = portmap['CLKOUT']
-            add_node(dev, f'HCLK{hclk_idx}_{src}', "GLOBAL_CLK", row, col, src)
+            if device == 'GW5AST-138C':
+                # 138C: the CLKDIV bel sits ON the real HCLK_BUF_BI/BO wires
+                # (decoded from the gw_sh oracle: L2HCLK -> HCLK_MUX_BETA ->
+                # HCLK_BUF_BI -> [clkdiv] -> HCLK_BUF_BO -> HCLK_MUX_ALPHA ->
+                # distribution).  Use those names so the bel pins land on wires
+                # the existing table-48 pips actually connect.
+                portmap['HCLKIN'] = f'HCLK_BUF_BI{hclk_idx}{i}'
+                portmap['RESETN'] = f'C{i + 4}'
+                portmap['CALIB']  = ['B6', 'B7', 'C0', 'C1'][i]
+                # input mux feeds HCLK_BUF_BI (HCLK_MUX_BETA -> BI is in table 48)
+                add_node(dev, f'HCLK{hclk_idx}_HCLK_BUF_BI{hclk_idx}{i}',
+                         "GLOBAL_CLK", row, col, portmap['HCLKIN'])
+                portmap = clkdiv.setdefault('outputs', {})
+                portmap['CLKOUT'] = f'HCLK_BUF_BO{hclk_idx}{i}'
+                add_node(dev, f'HCLK{hclk_idx}_HCLK_BUF_BO{hclk_idx}{i}',
+                         "GLOBAL_CLK", row, col, portmap['CLKOUT'])
+            else:
+                portmap['HCLKIN'] = f'CLKDIV_I{hclk_idx}{i}'
+                portmap['RESETN'] = f'C{i + 4}'  # GW5A-25A 0-C4, 1-C5, 2-C6, 3-C7
+                portmap['CALIB']  = ['B6', 'B7', 'C0', 'C1'][i]  # GW5A-25A
+                make_hclk_pip(dev, hclk_idx, row, col, f'HCLK_MUX_ALPHA{hclk_idx}{i}', portmap['HCLKIN'])
+                portmap = clkdiv.setdefault('outputs', {})
+                portmap['CLKOUT'] = f'CLKDIV_O{hclk_idx}{i}'
+                src = portmap['CLKOUT']
+                add_node(dev, f'HCLK{hclk_idx}_{src}', "GLOBAL_CLK", row, col, src)
 
             # DIV_MODE config fuses (GW5AST-138C, clean-room measured): one-hot
             # column in the control tile's local row 21.  Stored per DIV_MODE so
