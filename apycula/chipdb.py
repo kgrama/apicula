@@ -4210,21 +4210,53 @@ def set_chip_flags(dev, device):
 # which has a different layout).  Stored as a 'fuzzed' extra_func entry: bel tile +
 # per-attr {local (brow, bcol)} fuse sets, ready for gowin_pack to place.
 _GW5AST_FUZZED_CELLS = {
-    # cell: { 'tile': (row,col), 'attrs': { 'PARAM=VAL': [(local_byterow, local_bytecol), ...] } }
-    # NOTE param-fuse local coords TBD per cell (need tile-local conversion of the
-    # FUSES_EXTRACTED absolute coords); bel tile is the gridwalk-confirmed location.
-    'DQS':  {'tile': (81, 5)},
-    'SDPB': {'tile': (99, 161)},
-    'DCS':  {'tile': (81, 88)},
+    # cell: { 'io_tile': (r,c) routing/strobe anchor,  'cfg_tile': (r,c) param-config tile,
+    #         'attrs': { 'PARAM=VAL': [(local_brow, local_bcol, bitpos), ...] } }
+    # Coords from byte-col gridwalk (BEL_LOCATIONS.md) + re-extracted param differentials
+    # (byte frame).  DQS spans tiles: I/O strobe @ (81,5 ttyp241), CONFIG @ (72,0 ttyp64).
+    'DQS':  {'io_tile': (81, 5), 'cfg_tile': (72, 0),
+             'attrs': {
+                 'DQS_MODE=X2_DDR3': [(20, 79, 7)],          # vs X4 baseline
+                 'HWL=false':        [(20, 103, 7)],          # vs true
+                 'FIFO_MODE_SEL=1':  [(20, 36, 7), (20, 67, 7)],
+             }},
+    'SDPB': {'io_tile': (99, 161)},
+    'DCS':  {'io_tile': (81, 88)},
+    'DDRDLL': {'io_tile': (0, 0), 'cfg_tile': (0, 0),
+               'attrs': {
+                   'DIV_SEL=1':    [(18, 59, 7)],
+                   'SCAL_EN=true': [(19, 72, 7)],
+                   'DLL_FORCE=true': [(19, 61, 7)],
+               }},
+    'IODELAY': {'io_tile': (108, 141), 'cfg_tile': (108, 141),
+                'attrs': {  # C_STATIC_DLY 7-bit thermometer field @ local (20, 0..6)
+                    'C_STATIC_DLY': [(20, i, 7) for i in range(7)],
+                }},
+    # PLL trim — the fuzzed mid-array site @ tile (27,1).  ICP_SEL(6b)/LPF_RES(3b) are the
+    # LOCK-quality fuses (fixes the auto-calc-wrong lock failure).  1 of 12 PLL sites.
+    'PLL': {'io_tile': (27, 1), 'cfg_tile': (27, 1),
+            'attrs': {
+                'ICP_SEL': [(20, c, 7) for c in range(41, 47)],   # 6-bit charge-pump
+                'LPF_RES': [(20, c, 7) for c in range(61, 64)],   # 3-bit loop-filter R
+            }},
 }
 def fse_create_gw5ast_fuzzed_cells(dev, device):
     if device != 'GW5AST-138C':
         return
     for cell, info in _GW5AST_FUZZED_CELLS.items():
-        row, col = info['tile']
-        extra = dev.extra_func.setdefault((row, col), {})
+        io_row, io_col = info['io_tile']
+        # register the bel at its I/O-strobe anchor tile
+        extra = dev.extra_func.setdefault((io_row, io_col), {})
         fz = extra.setdefault('fuzzed', {})
-        fz[cell] = {'tile': [row, col], 'attrs': info.get('attrs', {})}
+        fz[cell] = {'io_tile': [io_row, io_col],
+                    'cfg_tile': list(info.get('cfg_tile', info['io_tile']))}
+        # register param-config fuses at the config tile, keyed by attr -> local bits
+        attrs = info.get('attrs', {})
+        if attrs:
+            cr, cc = info.get('cfg_tile', info['io_tile'])
+            cfg_extra = dev.extra_func.setdefault((cr, cc), {})
+            cfg = cfg_extra.setdefault('fuzzed_attrs', {})
+            cfg[cell] = {av: [list(b) for b in bits] for av, bits in attrs.items()}
 
 def from_fse(device, fse, dat: Datfile):
     wnames.select_wires(device)
