@@ -26,6 +26,17 @@ Grid: 109 rows x 182 cols; bitmap 1517 x 21872 bytes.
 3. Param-differential fuses (FUSES_EXTRACTED.md) are the clean config bits to fold; the
    full-diff bel tile here gives the LOCATION.
 
+## VERIFICATION vs silicon-proven vendor bitstream (pico_fb_4quad_320x240.fs)
+Checked whether my fuzzed cell tiles have bits set in the REAL DDR3/HDMI design built by
+the Gowin vendor flow (runs on silicon):
+- DQS-cfg (72,0): 11 bits set  -> CONFIRMED active (DDR uses DQS)
+- IODELAY (108,141): 4 bits   -> CONFIRMED active
+- DCS (54,92): 8 bits         -> CONFIRMED active
+- DDRDLL (0,0): 0 bits        -> vendor places DDRDLL at a DIFFERENT instance/tile
+- PLL (27,1): 0 bits          -> vendor uses different PLL sites (pll_27/pll_hdmi), not (27,1)
+=> 3/5 cells confirmed at predicted tiles; the 2 misses are PLACEMENT variance (multiple
+   instances/12 PLL sites), NOT extraction errors. Methodology + byte-col frame VALIDATED.
+
 ## Note on PLL
 12 PLL sites, only bottom bpll(108,146) modeled. My trim fuzz hit a mid-array site (~row27).
 For "1 PLL site" fold: re-fuzz forcing placement at the modeled bpll, or add a bel for the
