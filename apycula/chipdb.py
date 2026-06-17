@@ -4229,6 +4229,9 @@ _GW5AST_FUZZED_CELLS = {
     'DCS':  {'io_tile': (81, 88), 'cfg_tile': (54, 92),
              'attrs': {'DCS_MODE=FALLING':
                        [(20, c, 7) for c in (82, 84, 85, 87, 88, 89, 90)]}},
+    # DSP: MULT27X36/MULT12X12 etc. ttyp-20 = the DSP bel; EXACTLY 298 tiles on rows
+    # 18/36/54/72/90 == datasheet DSP=298 (exact, silicon-validated 164/298 used by fb).
+    'DSP': {'io_tile': (18, 1), 'sites_ttyp': 20},   # io_tile is a real ttyp-20 head (no +1)
     'DDRDLL': {'io_tile': (0, 0), 'cfg_tile': (0, 0),
                'attrs': {
                    'DIV_SEL=1':    [(18, 59, 7)],

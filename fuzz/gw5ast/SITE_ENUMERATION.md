@@ -33,5 +33,12 @@ apicula partially knows SSCMDSEL_FRAC0/1/2 + MDCLK/MDOPC (chipdb.py:4528) but th
 fractional-DIVIDER fuses are unfuzzed. Fuzzing MDIV_FRAC_SEL/ODIV0_FRAC_SEL/SSC_EN now
 (differential vs integer pll_trim baseline). Fixtures: cells/pll_mfrac/ofrac/ssc.v.
 
-## HCLK — datasheet 24  (TODO)
-## Global clock — datasheet 16 (TODO)
+## DSP — datasheet 298 ✅ EXACT MATCH
+ttyp-20 = the DSP bel. Grid has EXACTLY **298 ttyp-20 tiles** on rows 18/36/54/72/90
+== datasheet 298 (no extrapolation, 1:1). Clean constant-operand fuzz landed on ttyp-20.
+SILICON-VALIDATED: 164/298 used by the framebuffer (.fs XOR empty) = pico ENABLE_MUL + SBP.
+Folded all 298 via sites_ttyp=20. (Companion tiles ttyp 21/22 are the DSP macro body;
+ttyp 20 head is the placeable bel — use a real ttyp-20 head as io_tile to avoid +1.)
+
+## HCLK — datasheet 24 ✅ already modeled (393 hclk_pip tiles, gw5_make_hclk_pips)
+## Global clock — datasheet 16 (clock spine; clkdiv/clkdiv2/clock_gates in chipdb)
