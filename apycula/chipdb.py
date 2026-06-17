@@ -4203,6 +4203,29 @@ def set_chip_flags(dev, device):
     if device in {'GW5A-25A'}:
         dev.dcs_prefix = "CLKIN"
 
+# ── Fuzzed GW5AST-138C hard cells (DQS/SDPB/DCS + DDR-PHY/HDMI) ────────────────
+# Bel locations from gridwalk of fuzz bitstreams (apicula/fuzz/gw5ast/BEL_LOCATIONS.md);
+# param fuses from differential fuzz (FUSES_EXTRACTED.md), expressed TILE-LOCAL.
+# GATED GW5AST-138C ONLY — these coords are silicon-specific to this die (NOT GW5A-25A,
+# which has a different layout).  Stored as a 'fuzzed' extra_func entry: bel tile +
+# per-attr {local (brow, bcol)} fuse sets, ready for gowin_pack to place.
+_GW5AST_FUZZED_CELLS = {
+    # cell: { 'tile': (row,col), 'attrs': { 'PARAM=VAL': [(local_byterow, local_bytecol), ...] } }
+    # NOTE param-fuse local coords TBD per cell (need tile-local conversion of the
+    # FUSES_EXTRACTED absolute coords); bel tile is the gridwalk-confirmed location.
+    'DQS':  {'tile': (81, 5)},
+    'SDPB': {'tile': (99, 161)},
+    'DCS':  {'tile': (81, 88)},
+}
+def fse_create_gw5ast_fuzzed_cells(dev, device):
+    if device != 'GW5AST-138C':
+        return
+    for cell, info in _GW5AST_FUZZED_CELLS.items():
+        row, col = info['tile']
+        extra = dev.extra_func.setdefault((row, col), {})
+        fz = extra.setdefault('fuzzed', {})
+        fz[cell] = {'tile': [row, col], 'attrs': info.get('attrs', {})}
+
 def from_fse(device, fse, dat: Datfile):
     wnames.select_wires(device)
     dev = Device()
@@ -4288,6 +4311,7 @@ def from_fse(device, fse, dat: Datfile):
     fse_create_logic2clk(dev, device, dat)
     fse_create_dhcen(dev, device, fse, dat)
     fse_create_dlldly(dev, device)
+    fse_create_gw5ast_fuzzed_cells(dev, device)
     create_segments(dev, device)
     disable_plls(dev, device)
     sync_extra_func(dev)
