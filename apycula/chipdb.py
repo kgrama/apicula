@@ -4220,8 +4220,11 @@ _GW5AST_FUZZED_CELLS = {
                  'HWL=false':        [(20, 103, 7)],          # vs true
                  'FIFO_MODE_SEL=1':  [(20, 36, 7), (20, 67, 7)],
              }},
-    'SDPB': {'io_tile': (99, 161)},
-    'DCS':  {'io_tile': (81, 88)},
+    'SDPB': {'io_tile': (99, 161), 'cfg_tile': (99, 161),
+             'attrs': {'READ_MODE=1': [(20, 13, 7), (20, 83, 7)]}},   # +mirror @ (99,155)
+    'DCS':  {'io_tile': (81, 88), 'cfg_tile': (54, 92),
+             'attrs': {'DCS_MODE=FALLING':
+                       [(20, c, 7) for c in (82, 84, 85, 87, 88, 89, 90)]}},
     'DDRDLL': {'io_tile': (0, 0), 'cfg_tile': (0, 0),
                'attrs': {
                    'DIV_SEL=1':    [(18, 59, 7)],
