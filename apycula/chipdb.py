@@ -4221,7 +4221,11 @@ _GW5AST_FUZZED_CELLS = {
                  'FIFO_MODE_SEL=1':  [(20, 36, 7), (20, 67, 7)],
              }},
     'SDPB': {'io_tile': (99, 161), 'cfg_tile': (99, 161),
-             'attrs': {'READ_MODE=1': [(20, 13, 7), (20, 83, 7)]}},   # +mirror @ (99,155)
+             'attrs': {'READ_MODE=1': [(20, 13, 7), (20, 83, 7)]},   # +mirror @ (99,155)
+             # BSRAM head sites = all ttyp-40 tiles (6 rows 9/27/45/63/81/99, 116 heads);
+             # computed from the grid at fold time via 'sites_ttyp'.  datasheet 340 logical
+             # BSRAM (each block spans multiple tiles); these heads are placeable SDPB bels.
+             'sites_ttyp': 40},
     'DCS':  {'io_tile': (81, 88), 'cfg_tile': (54, 92),
              'attrs': {'DCS_MODE=FALLING':
                        [(20, c, 7) for c in (82, 84, 85, 87, 88, 89, 90)]}},
@@ -4268,9 +4272,15 @@ def fse_create_gw5ast_fuzzed_cells(dev, device):
             cfg_extra = dev.extra_func.setdefault((cr, cc), {})
             cfg = cfg_extra.setdefault('fuzzed_attrs', {})
             cfg[cell] = {av: [list(b) for b in bits] for av, bits in attrs.items()}
-        # multi-site cells (e.g. all 12 PLLs): register the bel + same tile-local attrs at
-        # every site (identical hard block; local fuse offsets are site-invariant).
-        for (sr, sc) in info.get('sites', []):
+        # grid-derived sites: all tiles of a given ttyp (e.g. BSRAM heads = ttyp 40)
+        sites = list(info.get('sites', []))
+        st = info.get('sites_ttyp')
+        if st is not None:
+            sites += [(r, c) for r in range(dev.rows) for c in range(dev.cols)
+                      if dev.grid[r][c] == st]
+        # multi-site cells: register the bel + same tile-local attrs at every site
+        # (identical hard block; local fuse offsets are site-invariant).
+        for (sr, sc) in sites:
             se = dev.extra_func.setdefault((sr, sc), {})
             se.setdefault('fuzzed', {})[cell] = {'io_tile': [sr, sc], 'cfg_tile': [sr, sc]}
             if attrs:

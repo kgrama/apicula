@@ -6,13 +6,14 @@ the discovered site count against the datasheet (gw5ast-138-resources memory).
 
 Datasheet targets: 12 PLL, 24 HCLK, 340 BSRAM, 16 global-clock, 298 DSP, 8 transceivers.
 
-## BSRAM (SDPB) — datasheet 340
-64-instance fuzz revealed the **4 BRAM-row structure**: rows **45, 63, 81, 99**
-(dense site counts 22/20/19/111; the 111 is row-99 inflated by routing into adjacent tiles).
-340 / 4 rows = **~85 BRAM per row**. The 64-instance run under-fills (only 64 placed); to map
-all 340, place 340 instances OR read the column stride within a row and extrapolate.
-Site cols within a row span ~58..175 (the BRAM column band).
-TODO: tighten clustering (filter routing-adjacent tiles by ttyp == BRAM-head only).
+## BSRAM (SDPB) — datasheet 340 ✅ VALIDATED
+Grid analysis (ttyp-40 = BSRAM head): **116 head tiles on 6 BRAM rows (9/27/45/63/81/99)**,
+~18-20 heads/row. 116 x 2.93 ~= 340 -> each head ~= 3 logical BSRAM blocks (datasheet 340
+counts sub-blocks; 116 heads = the PLACEMENT grid).
+VALIDATION (framebuffer.fs XOR empty.fs): **58/116 BSRAM tiles carry REAL distinct content**
+(137-215 bits each) = the BRAMs the framebuffer actually uses (pico RAM + line buffers + FIFOs).
+Confirms ttyp-40 tiles are genuine BSRAM sites. My single SDPB fuzz landed @ (99,161)=ttyp40 ✓.
+Folded all 116 via sites_ttyp=40 (grid-derived).
 
 ## PLL — datasheet 12 ✅ ALL 12 MAPPED
 12-instance fuzz + grid ttyp analysis: the 12 PLL sites = 4 left-edge + 4 right-edge + 4 bottom:
