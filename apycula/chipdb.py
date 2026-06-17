@@ -4238,9 +4238,17 @@ _GW5AST_FUZZED_CELLS = {
     # PLL trim — the fuzzed mid-array site @ tile (27,1).  ICP_SEL(6b)/LPF_RES(3b) are the
     # LOCK-quality fuses (fixes the auto-calc-wrong lock failure).  1 of 12 PLL sites.
     'PLL': {'io_tile': (27, 1), 'cfg_tile': (27, 1),
+            # The 12 PLL sites (datasheet-validated): 4 left + 4 right + 4 bottom.
+            'sites': [(27, 1), (45, 0), (63, 0), (81, 1),           # left edge
+                      (27, 177), (45, 181), (63, 181), (81, 177),  # right edge
+                      (108, 28), (108, 32), (108, 146), (108, 150)],# bottom BPLL
             'attrs': {
-                'ICP_SEL': [(20, c, 7) for c in range(41, 47)],   # 6-bit charge-pump
-                'LPF_RES': [(20, c, 7) for c in range(61, 64)],   # 3-bit loop-filter R
+                'ICP_SEL': [(20, c, 7) for c in range(41, 47)],   # 6-bit charge-pump (LOCK trim)
+                'LPF_RES': [(20, c, 7) for c in range(61, 64)],   # 3-bit loop-filter R (LOCK trim)
+                # FRACTIONAL-PLL fuses (frac_pll5 uses these; integer trim alone is wrong):
+                'MDIV_FRAC_SEL':  [(20, 89, 7)],   # fractional multiplier (.XXX)
+                'ODIV0_FRAC_SEL': [(20, 99, 7)],   # fractional output divider
+                'SSC_EN':         [(20, 5, 7)],    # spread-spectrum enable
             }},
 }
 def fse_create_gw5ast_fuzzed_cells(dev, device):
@@ -4260,6 +4268,14 @@ def fse_create_gw5ast_fuzzed_cells(dev, device):
             cfg_extra = dev.extra_func.setdefault((cr, cc), {})
             cfg = cfg_extra.setdefault('fuzzed_attrs', {})
             cfg[cell] = {av: [list(b) for b in bits] for av, bits in attrs.items()}
+        # multi-site cells (e.g. all 12 PLLs): register the bel + same tile-local attrs at
+        # every site (identical hard block; local fuse offsets are site-invariant).
+        for (sr, sc) in info.get('sites', []):
+            se = dev.extra_func.setdefault((sr, sc), {})
+            se.setdefault('fuzzed', {})[cell] = {'io_tile': [sr, sc], 'cfg_tile': [sr, sc]}
+            if attrs:
+                se.setdefault('fuzzed_attrs', {})[cell] = {
+                    av: [list(b) for b in bits] for av, bits in attrs.items()}
 
 def from_fse(device, fse, dat: Datfile):
     wnames.select_wires(device)
