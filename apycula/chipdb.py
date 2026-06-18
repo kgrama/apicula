@@ -4242,6 +4242,29 @@ _GW5AST_FUZZED_CELLS = {
                 'attrs': {  # C_STATIC_DLY 7-bit thermometer field @ local (20, 0..6)
                     'C_STATIC_DLY': [(20, i, 7) for i in range(7)],
                 }},
+    # OSER8_MEM / IDES8_MEM = the DDR write/read 8:1 SerDes (IOLOGIC in MEM-gearing mode).
+    # Fuzzed via the DDRDLL->DQS->{OSER8_MEM,IDES8_MEM} chain (apicula/fuzz/gw5ast/cells/
+    # oser8_mem.v, ides8_mem.v).  gridwalk: the SerDes-unique fuses land on the ttyp-244
+    # IO-logic config tiles (48 of them, the DDR byte-lane IOLOGIC sites on cols 0/181),
+    # co-located with the DQS strobe anchor @ (81,5 ttyp241).  So both register as
+    # placeable bels at ALL ttyp-244 lanes (like SDPB uses sites_ttyp=40 for BSRAM heads).
+    # Param fuses (HWL/TCLK_SOURCE/TXCLK_POL) are differential-extractable later; the bel
+    # LOCATION is what nextpnr needs to place the DDR3 PHY.
+    # OSER8_MEM param fuses are DIFFERENTIAL-EXTRACTED (apicula/fuzz/gw5ast/cells/
+    # oser8_mem_{pol1,hwl1,tclk}.v vs baseline): each variant reduced to ONE bit, then
+    # gridwalked to tile-local in (69,0 ttyp244) — the IDES/OSER MEM-gearing config tile.
+    #   TXCLK_POL=1 -> (5,39)  HWL=true -> (0,95)  TCLK_SOURCE=DQSW -> (11,79)  bitpos 7.
+    'OSER8_MEM': {'io_tile': (81, 5), 'cfg_tile': (69, 0),
+                  'sites_ttyp': 244,
+                  'attrs': {
+                      'TXCLK_POL=1':      [(5, 39, 7)],   # write-clock polarity
+                      'HWL=true':         [(0, 95, 7)],   # half-word-len mode (vs false)
+                      'TCLK_SOURCE=DQSW': [(11, 79, 7)],  # write-strobe: DQSW vs DQSW270
+                  }},
+    # IDES8_MEM has NO sweepable user param (FIFO/DQSR90 read-mux is set by gowin_pack
+    # from mode, not a fixture param), so location-only registration is correct.
+    'IDES8_MEM': {'io_tile': (81, 5), 'cfg_tile': (69, 0),
+                  'sites_ttyp': 244},
     # PLL trim — the fuzzed mid-array site @ tile (27,1).  ICP_SEL(6b)/LPF_RES(3b) are the
     # LOCK-quality fuses (fixes the auto-calc-wrong lock failure).  1 of 12 PLL sites.
     'PLL': {'io_tile': (27, 1), 'cfg_tile': (27, 1),
