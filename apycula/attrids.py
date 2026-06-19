@@ -1732,6 +1732,10 @@ iologic_attrids = {
         'IOLOGIC_UNKNOWN128':      128,
         'FCLKSEL3':                129,
         'FCLKSEL4':                130,
+        'IOLOGIC_UNKNOWN131':      131,
+        'IOLOGIC_UNKNOWN132':      132,
+        'UD2':                     133,
+        'IOLOGIC_UNKNOWN134':      134,
         'IOLOGIC_UNKNOWN135':      135,
         'IOLOGIC_UNKNOWN136':      136
     }

@@ -3736,8 +3736,11 @@ def place(db, tilemap, bels, cst, args, slice_attrvals, extra_slots):
                 if not iob.is_diff_p:
                     raise ValueError(f"Cannot place {cellname} at {bel_name} - not a P pin")
                 mode = parms['DIFF_TYPE']
-                if iob.is_true_lvds and mode[0] != 'T':
-                    raise ValueError(f"Cannot place {cellname} at {bel_name} - it is a true lvds pin")
+                # A TRUELVDS pin is a SUPERSET: it natively drives true LVDS (LVDS25) AND can be
+                # used in emulated mode (ELVDS / LVCMOS33D) — the displaying GW5AST-138C HDMI
+                # design drives these TRUELVDS pins (G15/J14/J15/K17) as LVCMOS33D.  So do NOT
+                # forbid ELVDS on a true-lvds pin.  Only the reverse is a hard electrical limit:
+                # a NON-true-lvds (emulated-only) pin cannot drive true LVDS.
                 if not iob.is_true_lvds and mode[0] == 'T':
                     raise ValueError(f"Cannot place {cellname} at {bel_name} - it is an emulated lvds pin")
                 if parms['DIFF_TYPE'] == 'TLVDS_IBUF_ADC':

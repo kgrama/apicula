@@ -2333,15 +2333,25 @@ _bpll_inputs = [(4, 'CLKIN'), (5, 'CLKFB'), (0, 'RESET'), (101, 'PLLPWD')]
 _bpll_outputs = [(1, 'LOCK'), (10, 'CLKOUT0'), (11, 'CLKOUT1'), (12, 'CLKOUT2'),
                  (13, 'CLKOUT3'), (14, 'CLKOUT4'), (15, 'CLKOUT5'), (16, 'CLKOUT6')]
 
-def fse_create_bottom_plls(dev, device, fse, dat):
-    """GW5AST-138C bottom-edge PLL bel + portmap + pad_pll + static bit-table.
+# GW5AST-138C has 4 bottom-edge BPLL head tiles (ttyp 182), 0-based head cols.
+# Confirmed by placing all 12 PLLs (hdl/test-a/pll12_top.v) + unpacking: BPLL outputs
+# land at 1-based C29/C33/C147/C151 => head cols (out_col-1) = 28/32/146/150.
+_BPLL_HEAD_COLS = [28, 32, 146, 150]
 
-    Models a single main-grid `PLL` bel at head tile R108C146 (ttyp 182) with
-    C147/148/149 as companion tiles. NOT the GW5A-25A slot-PLLA machinery.
+def fse_create_bottom_plls(dev, device, fse, dat):
+    """GW5AST-138C bottom-edge PLL bels (4x) + portmap + pad_pll + static bit-table.
+
+    Models the main-grid `PLL` bels at head tiles R108C{28,32,146,150} (ttyp 182), each
+    with its 3 companion tiles. NOT the GW5A-25A slot-PLLA machinery.
     """
     if device not in {'GW5AST-138C'}:
         return
-    row, col = 108, 146                 # head tile (0-based)
+    for _bpll_head_col in _BPLL_HEAD_COLS:
+        _fse_create_one_bottom_pll(dev, device, fse, dat, 108, _bpll_head_col)
+
+def _fse_create_one_bottom_pll(dev, device, fse, dat, row, col):
+    """Build ONE bottom BPLL bel at (row, col).  Node/alias names are column-qualified
+    (X{col}Y{row}/ prefix) so the 4 instances don't collide."""
     extra = dev.extra_func.setdefault((row, col), {})
     bpll = extra.setdefault('bpll', {})
     # Companion tiles, indexed 0..3 == C146..C149, for gowin_pack fuse placement.
@@ -2358,6 +2368,9 @@ def fse_create_bottom_plls(dev, device, fse, dat):
     }
 
     wt = wnames.wirenames
+    # Bare tile-local wire names (BPLL<nam>...); the per-site Himbaechel node keys all carry
+    # an X<col>Y<row>/ coordinate prefix, so the 4 head tiles never collide.  (The bel input
+    # CLK0/CLK2/C4/C5 wires live in the companion tile col+dlt, reached via an aliased node.)
     inputs = bpll.setdefault('inputs', {})
     for idx, nam in _bpll_inputs:
         wire_idx = dat.gw5aStuff['PllIn'][idx]
@@ -2373,6 +2386,12 @@ def fse_create_bottom_plls(dev, device, fse, dat):
             inputs[nam] = alias
             dev.nodes.setdefault(f'X{col}Y{row}/{alias}', ('PLL_I', {(row, col, alias)}))[1].add((wrow, wcol, wire))
 
+    # Which uniform-spine clock-MUX entry this head tile drives.  The GW5AST clock MUX
+    # (center tiles) accepts B[LR]PLL0CLK0..3 from the two bottom PLLs; head tiles left of
+    # center share BLPLL0, those right of center share BRPLL0 (the silicon has exactly 2
+    # bottom spine entries, each with 4 clocks -> only CLKOUT0..3 reach the global spine).
+    spine_side = 'BL' if col < dat.grid.center_x - 1 else 'BR'
+
     outputs = bpll.setdefault('outputs', {})
     for idx, nam in _bpll_outputs:
         wire_idx = dat.gw5aStuff['PllOut'][idx]
@@ -2381,11 +2400,21 @@ def fse_create_bottom_plls(dev, device, fse, dat):
             continue
         wire = wt[wire_idx]
         wrow, wcol = row, col + dlt
-        # Coordinate-free output node so the global clock router can use it.
-        logic_wire = wire if wcol == col else f'BPLL{nam}{wire}'
+        # The bel output is the bare tile-local wire BPLLOUT<nam> at this head tile; the
+        # R<row>C<col>/ tile prefix keeps the 4 sites distinct, no column-qualifier needed.
         outputs[nam] = f'BPLLOUT{nam}'
         dev.wire_delay[outputs[nam]] = 'X0'
-        dev.nodes.setdefault(f'BPLL{nam}', ('PLL_O', set()))[1].add((row, col, outputs[nam]))
+        logic_wire = wire if wcol == col else f'BPLL{nam}{wire}'
+        # CLKOUT0..3 enter the uniform global-clock spine MUX via the B[LR]PLL0CLK<n> node
+        # (already wired to every SPINE in the center mux tiles).  Tie this site's output
+        # wire into that node so dedicated clock routing can reach the spine from ANY of the
+        # 4 head tiles.  CLKOUT4..6 / LOCK have no spine entry -> tile-local PLL_O node only.
+        m = re.match(r'CLKOUT([0-3])$', nam)
+        if m:
+            spine_node = f'{spine_side}PLL0CLK{m.group(1)}'
+            dev.nodes.setdefault(spine_node, ('GLOBAL_CLK', set()))[1].add((row, col, outputs[nam]))
+        else:
+            dev.nodes.setdefault(f'X{col}Y{row}/BPLL{nam}', ('PLL_O', set()))[1].add((row, col, outputs[nam]))
         if wcol != col:
             dev.nodes.setdefault(f'X{col}Y{row}/{logic_wire}', ('PLL_O', set()))[1].add((row, col, logic_wire))
             dev.nodes.setdefault(f'X{col}Y{row}/{logic_wire}', ('PLL_O', set()))[1].add((wrow, wcol, wire))
