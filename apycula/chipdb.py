@@ -2111,7 +2111,11 @@ def fse_create_adc(dev, device, fse, dat):
 # no fabric fuses for a placed GTR (config is CSR), so the absolute (row,col) must come from a
 # placement oracle. Left as a TODO list; the wire-map + node-building below are anchor-relative
 # and correct once the anchors are filled in.
-_GTR_QUAD_ANCHORS = []   # e.g. [(0, <q0_col>), (0, <q1_col>)] — fill from a placed GTR oracle.
+# Two GTR quads, head tile per quad. The 8 SerDes lane tiles are ttyp 278..285 at row 0
+# cols 27/45/63/81 (quad0) and 99/117/135/153 (quad1), Δ18. Quad head = first lane; the
+# q0-vs-q1 oracle diff (gtr_q0/q1.fs) localizes the per-quad config to these top-edge tiles,
+# and the .dat UparDBIns deltas validate 57/58 as real CLB pips from these anchors.
+_GTR_QUAD_ANCHORS = [(0, 27), (0, 99)]
 
 # GTR .dat table groups -> (table name, direction). Quad/Pmac/Upar DB Ins are bel INPUTS
 # (fabric->GTR), Outs are bel OUTPUTS (GTR->fabric).
@@ -2141,7 +2145,8 @@ def fse_create_gtr(dev, device, fse, dat):
                 continue
             for prt in tab:
                 wire_idx, dlt_r, dlt_c = prt[0], prt[1], prt[2]
-                if wire_idx is None or wire_idx < 0 or wire_idx >= len(wt) or wire_idx == 0xffff:
+                # wt is a {idx: name} dict; skip sentinels and any idx without a fabric wire name.
+                if wire_idx is None or wire_idx < 0 or wire_idx == 0xffff or wire_idx not in wt:
                     continue
                 wire = wt[wire_idx]
                 wrow, wcol = row + dlt_r, col + dlt_c
