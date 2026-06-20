@@ -2115,13 +2115,10 @@ def fse_create_adc(dev, device, fse, dat):
 # cols 27/45/63/81 (quad0) and 99/117/135/153 (quad1), Δ18. Quad head = first lane; the
 # q0-vs-q1 oracle diff (gtr_q0/q1.fs) localizes the per-quad config to these top-edge tiles,
 # and the .dat UparDBIns deltas validate 57/58 as real CLB pips from these anchors.
-# Anchors FOUND ((0,27)+(0,99); see notes above) but the bel is DISABLED for now: the .dat GTR
-# ports tap GENERIC CLB wires (D5/A6/...), and joining those into custom nodes makes the bba
-# claim a shared tile-type wire twice ("add wire to multiple nodes") since all CLB tiles dedup
-# to one tile-type. Routing GTR fabric ports needs the Himbaechel cross-tile approach, not raw
-# node joins. Set to [(0,27),(0,99)] to re-enable once that's solved. Everything else (parser,
-# port map, arch-gen 'gtr' case, CSR) is in place.
-_GTR_QUAD_ANCHORS = []
+# Two GTR quads, head tile per quad (ttyp 278 / 282, both unique). Found via the q0-vs-q1 oracle
+# diff + .dat delta validation. Bel pins stay inside these unique tiles (Option A above), so no
+# tile-type-dedup clash.
+_GTR_QUAD_ANCHORS = [(0, 27), (0, 99)]
 
 # GTR .dat table -> (table name, direction, bel-port bus). Each table row is a bit of the
 # GTR12_QUAD INET_* interconnect bus (prim_sim widths: INET_Q_UPAR[421], INET_Q_PMAC[532],
@@ -2144,18 +2141,22 @@ def fse_create_gtr(dev, device, fse, dat):
     """
     if device not in {'GW5AST-138C'} or not _GTR_QUAD_ANCHORS:
         return
-    wt = wnames.wirenames
     for qi, (row, col) in enumerate(_GTR_QUAD_ANCHORS):
         extra = dev.extra_func.setdefault((row, col), {})
         gtr = extra.setdefault('gtr', {})
         ins = gtr.setdefault('inputs', {})
         outs = gtr.setdefault('outputs', {})
-        claimed = set()   # fabric (wrow,wcol,wire) already taken by a port this quad
-        # fabric wires already owned by any existing node (BSRAM/PLL/etc.) — a real GTR tap
-        # never lands on one; collisions = stray .dat tail entries, so skip them.
-        pre_owned = set()
-        for _nt, _mem in dev.nodes.values():
-            pre_owned.update(_mem)
+        # Option A: keep every GTR bel pin INSIDE the (unique-ttyp) GTR tile. The pin is its own
+        # local wire; a fuse-less PIP bridges it to a GTR-tile routing-mesh wire that the chip's
+        # normal fabric graph already spans to neighbours. So the PCS net routes through the mesh
+        # into this tile and the in-tile pip reaches the bel pin — NO custom cross-tile node, so
+        # no tile-type-dedup clash (the .dat per-port fabric tap is kept only as a routing hint).
+        tt = dev[row, col]
+        mesh = sorted(w for w in tt.pips
+                      if (w[0] in 'XNSEW' and any(ch.isdigit() for ch in w)))
+        if not mesh:
+            continue
+        mi = 0
         for tname, direction, bus, max_bits in _GTR_PORT_TABLES:
             tab = dat.gw5aStuff.get(tname)
             if tab is None:
@@ -2164,38 +2165,21 @@ def fse_create_gtr(dev, device, fse, dat):
                 if bit >= max_bits:
                     break
                 wire_idx, dlt_r, dlt_c = prt[0], prt[1], prt[2]
-                # wt is a {idx: name} dict; skip sentinels (0xFFFF in wire OR either delta) and
-                # any idx without a fabric wire name. 0xFFFF deltas = port has no fabric tap.
-                if wire_idx is None or wire_idx == 0xffff or wire_idx not in wt:
+                # skip sentinel/empty ports (0xFFFF wire or delta = no fabric tap)
+                if wire_idx is None or wire_idx == 0xffff or wire_idx not in wnames.wirenames:
                     continue
                 if dlt_r == 0xffff or dlt_c == 0xffff:
                     continue
-                # GTR taps fabric in/near its top-edge bank; a delta reaching tens of rows away
-                # (e.g. into the BSRAM rows 45/63) is a stray .dat tail entry, not a real tap.
-                if dlt_r > 12:
-                    continue
-                wrow, wcol = row + dlt_r, col + dlt_c
-                if not (0 <= wrow < dev.rows and 0 <= wcol < dev.cols):
-                    continue
-                # The .dat row buffers (e.g. PmacDB 2920) are longer than the real port count and
-                # the tail holds stray entries that re-tap UPAR's fabric wires. One fabric wire
-                # belongs to exactly one node, so first-claim-wins drops the spurious duplicates.
-                fab = (wrow, wcol, wt[wire_idx])
-                if fab in claimed or fab in pre_owned:
-                    continue
-                claimed.add(fab)
-                wire = wt[wire_idx]
-                # bel pin = the GTR12_QUAD INET bus bit, on a UNIQUE tile-local alias wire at the
-                # GTR tile, joined to the single fabric tap wire by a node. The fabric wire is
-                # recorded in `claimed`/`pre_owned` so it is joined by EXACTLY ONE gtr node and
-                # never one already owned elsewhere (generic CLB wires share a tile-type, so a
-                # double-join would make the bba claim a tile-type wire twice and abort).
                 pin = f'{bus}[{bit}]'
-                alias = f'GTR{qi}_{bus}_{bit}'
+                pin_wire = f'GTR{qi}_{bus}_{bit}'                # unique, in this GTR tile
+                bridge = mesh[mi % len(mesh)]; mi += 1           # a mesh wire the router reaches
                 wtype = 'IO_I' if direction == 'in' else 'IO_O'
-                node = dev.nodes.setdefault(f'X{col}Y{row}/{alias}', (wtype, {(row, col, alias)}))
-                node[1].add((wrow, wcol, wire))
-                (ins if direction == 'in' else outs)[pin] = alias
+                dev.wire_delay[pin_wire] = 'X0'
+                if direction == 'in':                            # mesh -> bel pin
+                    tt.pips.setdefault(pin_wire, {}).update({bridge: set()})
+                else:                                            # bel pin -> mesh
+                    tt.pips.setdefault(bridge, {}).update({pin_wire: set()})
+                (ins if direction == 'in' else outs)[pin] = pin_wire
 
 # Only the slots that are used are added to the binary image.
 def fse_create_slot_plls(dev, device, fse, dat):
