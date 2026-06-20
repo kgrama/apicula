@@ -262,7 +262,7 @@ _bsram_cell_types = {'DP', 'SDP', 'SP', 'ROM'}
 _dsp_cell_types = {'ALU54D', 'MULT36X36', 'MULTALU36X18', 'MULTADDALU18X18', 'MULTALU18X18', 'MULT18X18', 'MULT9X9', 'PADD18', 'PADD9', 'MULT12X12', 'MULTALU27X18', 'MULTADDALU12X12'}
 def get_bels(db, data):
     later = []
-    belre = re.compile(r"X(\d+)Y(\d+)/(?:GSR|LUT|DFF|IOB|MUX|ALU|ODDR|OSC[ZFHWOA]?|BUF[GS]|RAM16SDP4|RAM16SDP2|RAM16SDP1|PLL|IOLOGIC|CLKDIV2|CLKDIV|BSRAM|ALU|MULTALU18X18|MULTALU27X18|MULTALU36X18|MULTADDALU18X18|MULTADDALU12X12|MULT36X36|MULT18X18|MULT12X12|MULT9X9|PADD18|PADD9|BANDGAP|DQCE|DCS|USERFLASH|EMCU|DHCEN|MIPI_OBUF|MIPI_IBUF|DLLDLY|PINCFG|PLLA|ADC)(\w*)")
+    belre = re.compile(r"X(\d+)Y(\d+)/(?:GSR|LUT|DFF|IOB|MUX|ALU|ODDR|OSC[ZFHWOA]?|BUF[GS]|RAM16SDP4|RAM16SDP2|RAM16SDP1|PLL|IOLOGIC|CLKDIV2|CLKDIV|BSRAM|ALU|MULTALU18X18|MULTALU27X18|MULTALU36X18|MULTADDALU18X18|MULTADDALU12X12|MULT36X36|MULT18X18|MULT12X12|MULT9X9|PADD18|PADD9|BANDGAP|DQCE|DCS|USERFLASH|EMCU|DHCEN|MIPI_OBUF|MIPI_IBUF|DLLDLY|PINCFG|PLLA|ADC|GTR12_QUAD)(\w*)")
 
     for cellname, cell in data['modules']['top']['cells'].items():
         if cell['type'].startswith('DUMMY_') or cell['type'] in {'OSER16', 'IDES16'} or 'NEXTPNR_BEL' not in cell['attributes']:
@@ -3587,6 +3587,12 @@ def get_pullup_io(cfg):
 def place(db, tilemap, bels, cst, args, slice_attrvals, extra_slots):
     global adc_ios
     for typ, row, col, num, parms, attrs, cellname, cell in bels:
+        # GW5AST-138C GTR12_QUAD transceiver: configuration is the CSR command block
+        # (appended separately via --serdes_csr), NOT tile fuses. The bel only needs to be
+        # placed + its fabric tap pips routed (handled by get_pips); emit no tile bits here.
+        if typ == 'GTR12_QUAD':
+            continue
+
         tiledata = db[row-1, col-1]
         tile = tilemap[(row-1, col-1)]
 
