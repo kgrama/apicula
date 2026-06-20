@@ -793,8 +793,12 @@ def set_bpll_attrs(db, row, col, attrs):
         bits.add((tb[0], tb[1], tb[2]))
     for c in bt['div_table'][key]:
         bits.add((0, prow, c))
+    # Fixed-config bit-tables (L/R PLLs) bake ODIV + enable bits into base_bits and leave
+    # odiv_therm/clkout_en_col empty; only the parametric bottom-edge table has them.
     for k in range(7):
         if not isen(f'CLKOUT{k}_EN', k == 0):
+            continue
+        if str(k) not in bt['odiv_therm']:
             continue
         n = geti(f'ODIV{k}_SEL', 8)
         ti, base = bt['odiv_therm'][str(k)]
