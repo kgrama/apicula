@@ -341,26 +341,21 @@ class Datfile:
         ret["PllRBIns"]             = self.read_scaledGrid16(216, 3, 6, 1, RSTable5ATOffset + 0x30a8)
         ret["PllRBOuts"]            = self.read_scaledGrid16( 32, 3, 6, 1, RSTable5ATOffset + 0x35b8)
 
-        """
-        ret["MipiIns1"]             = self.read_scaledGrid16(0xc3, 3, 3, RSTable5ATOffset + 0x22d0, 0xe)
-        ret["MipiIns2"]             = self.read_scaledGrid16(0xc3, 3, 3, RSTable5ATOffset + 0x2680, 0xe)
-        ret["MipiOuts1"]            = self.read_scaledGrid16(0x76, 3, 3, RSTable5ATOffset + 0x2520, 0)
-        ret["MipiOuts2"]            = self.read_scaledGrid16(0x76, 3, 3, RSTable5ATOffset + 0x28c8, 6)
+        # GTR12_QUAD transceiver port->wire tables. Each row = (wire_idx, dlt_row, dlt_col)
+        # i.e. numCols=3, rowScaling=3 (contiguous u16 triples), colScaling=1. The base is
+        # RSTable5ATOffset+<off>. (The earlier commented form had the last two args swapped,
+        # which read garbage.) 0xFFFF entries are unused ports. Validated against a placed
+        # GTR oracle: UparDBIns -> fabric LUT-input wires at (+1 row, +52..70 col).
+        ret["Gtrl12QuadDBIns1"]     = self.read_scaledGrid16(0x351, 3, 3, 1, RSTable5ATOffset + 0x2a28)
+        ret["Gtrl12QuadDBIns2"]     = self.read_scaledGrid16(0x351, 3, 3, 1, RSTable5ATOffset + 0x3420)
+        ret["Gtrl12QuadDBOuts1"]    = self.read_scaledGrid16(0x29c, 3, 3, 1, RSTable5ATOffset + 0x6180)
+        ret["Gtrl12QuadDBOuts2"]    = self.read_scaledGrid16(0x29c, 3, 3, 1, RSTable5ATOffset + 0x6958)
 
-        ret["MipiDPhyIns"]          = self.read_scaledGrid16(0xbb, 3, 3, RSTable5ATOffset + 0x91c0, 10)
-        ret["MipiDPhyOuts"]         = self.read_scaledGrid16(0x6a, 3, 3, RSTable5ATOffset + 0x93f0, 0xc)
+        ret["Gtrl12PmacDBIns"]      = self.read_scaledGrid16(0xb68, 3, 3, 1, RSTable5ATOffset + 0x3e10)
+        ret["Gtrl12PmacDBOuts"]     = self.read_scaledGrid16(0xb68, 3, 3, 1, RSTable5ATOffset + 0x7128)
 
-        ret["Gtrl12QuadDBIns1"]     = self.read_scaledGrid16(0x351, 3, 3, RSTable5ATOffset + 0x2a28, 10)
-        ret["Gtrl12QuadDBIns2"]     = self.read_scaledGrid16(0x351, 3, 3, RSTable5ATOffset + 0x3420, 0)
-        ret["Gtrl12QuadDBOuts1"]    = self.read_scaledGrid16(0x29c, 3, 3, RSTable5ATOffset + 0x6180, 0xc)
-        ret["Gtrl12QuadDBOuts2"]    = self.read_scaledGrid16(0x29c, 3, 3, RSTable5ATOffset + 0x6958, 4)
-
-        ret["Gtrl12PmacDBIns"]      = self.read_scaledGrid16(0xb68, 3, 3, RSTable5ATOffset + 0x3e10, 6)
-        ret["Gtrl12PmacDBOuts"]     = self.read_scaledGrid16(0xb68, 3, 3, RSTable5ATOffset + 0x7128, 0xc)
-
-        ret["Gtrl12UparDBIns"]      = self.read_scaledGrid16(0x69, 3, 3, RSTable5ATOffset + 0x6048, 6)
-        ret["Gtrl12UparDBOuts"]     = self.read_scaledGrid16(0x69, 3, 3, RSTable5ATOffset + 0x8620, 10)
-        """
+        ret["Gtrl12UparDBIns"]      = self.read_scaledGrid16(0x69, 3, 3, 1, RSTable5ATOffset + 0x6048)
+        ret["Gtrl12UparDBOuts"]     = self.read_scaledGrid16(0x69, 3, 3, 1, RSTable5ATOffset + 0x8620)
 
         ret["Ae350SocIns"]          = self.read_scaledGrid16(0x1b1, 3, 3, RSTable5ATOffset + 0x86a0, 6)
         ret["Ae350SocOuts"]         = self.read_scaledGrid16(0x206, 3, 3, RSTable5ATOffset + 0x8bb0, 10)

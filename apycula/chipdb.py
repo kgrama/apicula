@@ -2101,6 +2101,57 @@ def fse_create_adc(dev, device, fse, dat):
 # but equal heights, with no geometric organization but with unique numbers.
 # A slot with a specific number is responsible for a fixed primitive—for
 # example, slot 6 is the left PLL, slot 8 is the lower PLL.
+# GW5AST-138C GTR12_QUAD high-speed transceiver. Port->wire map comes from the .dat
+# Gtrl12{Quad,Pmac,Upar}DB{Ins,Outs} tables (dat_parser, re-enabled). Each table row is
+# (wire_idx, dlt_row, dlt_col) relative to the quad anchor tile. The transceiver CONFIG is
+# NOT tile fuses — it is the CSR command block baked by gowin_pack --serdes_csr. So this only
+# models the fabric PORT WIRES so nextpnr can route the PCS<->GTR serdes_* interface.
+#
+# Anchor tiles (the 2 quads' head tiles) are NOT yet silicon-pinned — gowin_unpack surfaces
+# no fabric fuses for a placed GTR (config is CSR), so the absolute (row,col) must come from a
+# placement oracle. Left as a TODO list; the wire-map + node-building below are anchor-relative
+# and correct once the anchors are filled in.
+_GTR_QUAD_ANCHORS = []   # e.g. [(0, <q0_col>), (0, <q1_col>)] — fill from a placed GTR oracle.
+
+# GTR .dat table groups -> (table name, direction). Quad/Pmac/Upar DB Ins are bel INPUTS
+# (fabric->GTR), Outs are bel OUTPUTS (GTR->fabric).
+_GTR_PORT_TABLES = [
+    ('Gtrl12UparDBIns',  'in'),  ('Gtrl12UparDBOuts',  'out'),
+    ('Gtrl12QuadDBIns2', 'in'),  ('Gtrl12QuadDBOuts1', 'out'), ('Gtrl12QuadDBOuts2', 'out'),
+    ('Gtrl12PmacDBIns',  'in'),  ('Gtrl12PmacDBOuts',  'out'),
+]
+
+def fse_create_gtr(dev, device, fse, dat):
+    """GW5AST-138C GTR12_QUAD transceiver bels: fabric port wires from the .dat tables.
+
+    Config is via CSR (gowin_pack --serdes_csr), not tile fuses; this only wires the
+    fabric-facing ports so the PCS<->GTR interface can route.
+    """
+    if device not in {'GW5AST-138C'} or not _GTR_QUAD_ANCHORS:
+        return
+    wt = wnames.wirenames
+    for qi, (row, col) in enumerate(_GTR_QUAD_ANCHORS):
+        extra = dev.extra_func.setdefault((row, col), {})
+        gtr = extra.setdefault('gtr', {})
+        ins = gtr.setdefault('inputs', {})
+        outs = gtr.setdefault('outputs', {})
+        for tname, direction in _GTR_PORT_TABLES:
+            tab = dat.gw5aStuff.get(tname)
+            if tab is None:
+                continue
+            for prt in tab:
+                wire_idx, dlt_r, dlt_c = prt[0], prt[1], prt[2]
+                if wire_idx is None or wire_idx < 0 or wire_idx >= len(wt) or wire_idx == 0xffff:
+                    continue
+                wire = wt[wire_idx]
+                wrow, wcol = row + dlt_r, col + dlt_c
+                # coordinate-qualified node so the 2 quads don't collide
+                alias = f'GTR{qi}_{wire}'
+                wtype = 'IO_I' if direction == 'in' else 'IO_O'
+                node = dev.nodes.setdefault(f'X{col}Y{row}/{alias}', (wtype, {(row, col, alias)}))
+                node[1].add((wrow, wcol, wire))
+                (ins if direction == 'in' else outs)[alias] = wire
+
 # Only the slots that are used are added to the binary image.
 def fse_create_slot_plls(dev, device, fse, dat):
     # NOTE: GW5AST-138C is intentionally NOT handled here. It does NOT use the
@@ -4490,6 +4541,7 @@ def from_fse(device, fse, dat: Datfile):
     fse_create_slot_plls(dev, device, fse, dat)
     fse_create_bottom_plls(dev, device, fse, dat)
     fse_create_lr_plls(dev, device, fse, dat)
+    fse_create_gtr(dev, device, fse, dat)
     fse_create_adc(dev, device, fse, dat)
     fse_create_mipi(dev, device, dat)
     fse_create_i3c(dev, device, dat)
