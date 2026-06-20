@@ -42,3 +42,32 @@ ttyp 20 head is the placeable bel — use a real ttyp-20 head as io_tile to avoi
 
 ## HCLK — datasheet 24 ✅ already modeled (393 hclk_pip tiles, gw5_make_hclk_pips)
 ## Global clock — datasheet 16 (clock spine; clkdiv/clkdiv2/clock_gates in chipdb)
+
+## L/R PLL FUSE FRAME (Jun 2026, L0-vs-empty diff, oracle bpll_L0.fs @ PLL_L[0])
+LEFT PLL placed at HEAD tile **(27,1) ttyp 74** + companions (27,2) ttyp75 + (27,3) ttyp76
+(3-tile group, HORIZONTAL col+1,+2 — vs bottom's 4-tile 182/183/184/185).
+Config fuses: local **rows 2-9** (base/power-up) + **row 20** (divider register) — analogous
+to bottom (rows 2-9 + row 21) but row 20 not 21, and 3 tiles not 4. ~124/125/126 bits/tile.
+Row-20 divider-bit columns captured per tile (see session). RIGHT mirrors at (27,177) ttyp
+77/78/79. Rows 45/63 shift in by 1 col (head ttyp 75 not 74 at those rows — see grid dump).
+NOTE: frame is SIMILAR to bottom but NOT identical -> needs its own bit_table + a same-site
+param-sweep to map row-20 cols -> IDIV/FBDIV/MDIV/ODIV (like _BPLL_DIV_TABLE was for bottom).
+Spine: L/R CLKOUT0..3 feed TLPLL{0,1}/TRPLL{0,1} groups (clknames_5ast138c) — 4 groups,
+PLL0+PLL1 each, vs bottom's 2 (BL/BR PLL0-only).
+
+## L-PLL MDIV FUSE MAPPING (proven differential, Jun 2026)
+Same-site (PLL_L[0]) MDIV=18 vs MDIV=24 diff = **5 bits, ALL in tile (27,1) ttyp74 local row 20**,
+bit-cols **351, 359, 367, 655, 663**. Confirms: L-PLL head/config tile = (27,1), divider register
+= local row 20. Differential extraction pipeline PROVEN for L/R (build 2 same-site param variants ->
+diff_bits.py -> ~5 clean bits). Oracle TCLs: hdl/test-c/build_lsw_{18,24}.tcl (lpll_m{18,24}.v +
+lpll_sweep.cst INS_LOC PLL_L[0]). Repeat for IDIV/FBDIV/ODIV0 to complete the L div_table; mirror
+for PLL_R[0]. Base/lock bits from bpll_L0-vs-empty filtered to tiles (27,1/2/3).
+
+## L-PLL DIVIDER FUSE MAP (same-site PLL_L[0] differentials, all in tile (27,1) row20)
+- MDIV 18->24: 5 bits, cols 351,359,367,655,663
+- FBDIV 1->4 : 4 bits, cols 191,199,351,367  (cols 351/367 shared w/ MDIV -> packed field, like bottom _BPLL_DIV_TABLE)
+- IDIV: 1->3 invalid (PFD<19MHz); redo IDIV=2 (PFD25/VCO900)
+- ODIV0 20->8: 0 FUSE bits (.fs md5 differs but read_bitstream matrix identical -> ODIV0 not in
+  the placed-CLKOUT0 fuse frame for single-output config; doesn't affect LOCK, only output freq).
+Base/lock bits: 226 (rows 2-9 across the 3 tiles) from bpll_L0-vs-empty (saved /tmp/L_base_bits.json).
+=> For a LOCKING L-PLL at a fixed config, base(226)+MDIV+FBDIV+IDIV fields suffice (VCO-determining).

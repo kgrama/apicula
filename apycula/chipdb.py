@@ -11,6 +11,7 @@ import apycula.fse_parser as fuse
 from apycula import wirenames as wnames
 from apycula import pindef
 from apycula import bitmatrix
+from apycula import gw5ast_lr_pll
 
 # the character that marks the I/O attributes that come from the nextpnr
 mode_attr_sep = '&'
@@ -2426,6 +2427,80 @@ def _fse_create_one_bottom_pll(dev, device, fse, dat, row, col):
     # later in the builder, so the actual pin->bel mapping is finalized there in
     # fill_bottom_pll_pads(); here we only guarantee the bel/portmap/bit-table.
 
+# GW5AST-138C left/right edge PLLs that feed the TOP fabric half (rows 0..54) via the
+# TL0/TR0 spine groups. The 4 bottom PLLs only reach the bottom half, so these are
+# REQUIRED to clock the whole fabric. Top-area sites only (rows < center): head tile +
+# 2 horizontal companions. Fuse tables silicon-measured (gw5ast_lr_pll, fixed 45MHz config).
+# (row, head_col, spine_side). LEFT head ttyp 74, RIGHT head ttyp 77.
+_LRPLL_SITES = [(27, 1, 'TL'), (27, 177, 'TR')]
+
+def fse_create_lr_plls(dev, device, fse, dat):
+    """GW5AST-138C top-area left/right PLL bels (2x) feeding TL0/TR0 spine groups."""
+    if device not in {'GW5AST-138C'}:
+        return
+    for row, col, side in _LRPLL_SITES:
+        base = gw5ast_lr_pll._LPLL_BASE_BITS if side == 'TL' else gw5ast_lr_pll._RPLL_BASE_BITS
+        divc = gw5ast_lr_pll._LPLL_DIV_1_1_18 if side == 'TL' else gw5ast_lr_pll._RPLL_DIV_1_1_18
+        _fse_create_one_lr_pll(dev, dat, row, col, side, base, divc)
+
+def _fse_create_one_lr_pll(dev, dat, row, col, side, base_bits, div_cols):
+    """Build ONE L/R PLL bel at (row, col). Reuses the bottom-PLL extra_func['bpll']
+    schema so gowin_pack.set_bpll_attrs handles it unchanged; only the geometry (3 tiles,
+    config row 20) and spine group (TL0/TR0) differ. Fixed config (IDIV1/FBDIV1/MDIV18)."""
+    extra = dev.extra_func.setdefault((row, col), {})
+    bpll = extra.setdefault('bpll', {})
+    # 3-tile horizontal group (head + 2 companions), unlike the bottom edge's 4.
+    bpll['tiles'] = [(row, col), (row, col + 1), (row, col + 2)]
+    bpll['bit_table'] = {
+        'row': 20,                       # L/R divider register row (bottom uses 21)
+        'div_cols': sorted(div_cols),
+        'div_table': {'1,1,18': sorted(div_cols)},   # measured fixed config (45MHz)
+        'base_bits': [list(t) for t in base_bits],
+        'clkin_path': [],                # CLKIN delivery TODO (pad-fed lock is future work)
+        'odiv_therm': {},                # ODIV has no extra fuse in single-output config
+        'clkout_en_col': {},
+    }
+
+    wt = wnames.wirenames
+    inputs = bpll.setdefault('inputs', {})
+    for idx, nam in _bpll_inputs:
+        wire_idx = dat.gw5aStuff['PllIn'][idx]
+        dlt = dat.gw5aStuff['PllInDlt'][idx]
+        if wire_idx is None or wire_idx < 0:
+            continue
+        wire = wt[wire_idx]
+        wrow, wcol = row, col + dlt
+        if wcol == col:
+            inputs[nam] = wire
+        else:
+            alias = f'{side}PLL{nam}{wire}'
+            inputs[nam] = alias
+            dev.nodes.setdefault(f'X{col}Y{row}/{alias}', ('PLL_I', {(row, col, alias)}))[1].add((wrow, wcol, wire))
+
+    # CLKOUT0..3 enter the global spine via the TL0/TR0 group (PLL0; these top sites are
+    # the first of their side). Same mechanism the bottom edge uses for BL/BR.
+    outputs = bpll.setdefault('outputs', {})
+    for idx, nam in _bpll_outputs:
+        wire_idx = dat.gw5aStuff['PllOut'][idx]
+        dlt = dat.gw5aStuff['PllOutDlt'][idx]
+        if wire_idx is None or wire_idx < 0:
+            continue
+        wire = wt[wire_idx]
+        wrow, wcol = row, col + dlt
+        outputs[nam] = f'BPLLOUT{nam}'
+        dev.wire_delay[outputs[nam]] = 'X0'
+        logic_wire = wire if wcol == col else f'{side}PLL{nam}{wire}'
+        m = re.match(r'CLKOUT([0-3])$', nam)
+        if m:
+            spine_node = f'{side}PLL0CLK{m.group(1)}'
+            dev.nodes.setdefault(spine_node, ('GLOBAL_CLK', set()))[1].add((row, col, outputs[nam]))
+        else:
+            dev.nodes.setdefault(f'X{col}Y{row}/{side}PLL{nam}', ('PLL_O', set()))[1].add((row, col, outputs[nam]))
+        if wcol != col:
+            dev.nodes.setdefault(f'X{col}Y{row}/{logic_wire}', ('PLL_O', set()))[1].add((row, col, logic_wire))
+            dev.nodes.setdefault(f'X{col}Y{row}/{logic_wire}', ('PLL_O', set()))[1].add((wrow, wcol, wire))
+        dev[row, col].pips.setdefault(logic_wire, {}).update({outputs[nam]: set()})
+
 # DHCEN (as I imagine) is an additional control input of the HCLK input
 # multiplexer. We have four input multiplexers - HCLK_IN0, HCLK_IN1, HCLK_IN2,
 # HCLK_IN3 (GW1N-9C with its additional four multiplexers stands separately,
@@ -4414,6 +4489,7 @@ def from_fse(device, fse, dat: Datfile):
     fse_create_hclk_nodes(dev, device, fse, dat)
     fse_create_slot_plls(dev, device, fse, dat)
     fse_create_bottom_plls(dev, device, fse, dat)
+    fse_create_lr_plls(dev, device, fse, dat)
     fse_create_adc(dev, device, fse, dat)
     fse_create_mipi(dev, device, dat)
     fse_create_i3c(dev, device, dat)
