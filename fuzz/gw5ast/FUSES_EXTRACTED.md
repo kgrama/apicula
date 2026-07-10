@@ -37,6 +37,17 @@ Fixtures from de-vendored controller (vendor-correct ports). All confirmed.
   portmap (input/output wire names — trace from the ~200/2499-bit full diff), and the
   routing pips to reach the cell. Param fuses + location are the chipdb fuse-table core.
 
+## USB_CDR_SERDES (soft-PHY CDR, ttyp-227 @ (82,89)) — HS/FS + op_mode axes (2026-07-10)
+Fixtures hdl/usb2-soft-console/fuzz_softphy/run_v0..v4 (utmi_op_mode_i / utmi_xcvrselect_i swept
+as constants). diff_bits.py XOR:
+- op_mode  v0-v1: **172 bits**, TIGHT (22 bit-rows, 1157-1167).  v0-v2: 224.
+- HS<->FS  v0-v4: **27250 bits**, 126 rows, concentrated 1173-1180 (~1000 bits/row) + fabric tail.
+INTERPRETATION: both are UTMI **runtime INPUT PINS** (op_mode[1:0], xcvrselect[1:0]), NOT bel
+param-fuses.  xcvrselect (HS/FS) re-synthesizes soft-PHY DATAPATH logic -> the diff is fabric-
+dominated, so it must NOT be modeled as an attr-fuse mode.  op_mode's small localized diff is the
+constant tie-off + normal/loopback mux.  Recorded in chipdb.py USB_CDR_SERDES['utmi_pins'] as the
+control axis + measured locality; the pin<->wire portmap trace is the remaining refinement.
+
 ## TODO next
 - OSER10, ELVDS_OBUF (HDMI), DCS, DHCEN, SDPB.
 - Fold (attr -> {bits}) into apycula chipdb fuse tables for these cells, keyed by tile.
