@@ -248,7 +248,7 @@ def is_ram_pin(db, r, c, idx):
     """ Internal SDRAM/HyperRAM pins do not have an IO standard, so we will ignore them """
     partno = pnr['modules']['top']['settings'].get('packer.partno', '')
     pkg, series, _ = db.packages[partno]
-    if not db.sip_cst or pkg not in db.sip_cst[series]:
+    if not db.sip_cst or series not in db.sip_cst or pkg not in db.sip_cst[series]:
         return False
     row = int(r) - 1
     col = int(c) - 1
@@ -4514,8 +4514,13 @@ def route(db, tilemap, pips):
             # XXX consider use set_clock_fuses
             if device not in {'GW5A-25A', 'GW5AST-138C'} and dest in tiledata.clock_pips:
                 bits = tiledata.clock_pips[dest][src]
-            elif dest in {'FCLKA', 'FCLKB'} or set_5a_hclk_wire_fuses(src, dest):
+            elif dest in {'FCLKA', 'FCLKB'}:
                 continue
+            elif device in {'GW5A-25A', 'GW5AST-138C'} and set_5a_hclk_wire_fuses(src, dest):
+                continue
+            elif (row - 1, col - 1) in db.hclk_pips and dest in db.hclk_pips[row - 1, col - 1] and src in db.hclk_pips[row - 1, col - 1][dest]:
+                bits = db.hclk_pips[row - 1, col - 1][dest][src]
+                bits.update(do_hclk_banks(db, row - 1, col - 1, src, dest))
             else:
                 bits = tiledata.pips[dest][src]
                 # check if we have 'not conencted to' situation
