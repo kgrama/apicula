@@ -4814,6 +4814,28 @@ _GW5AST_FUZZED_CELLS = {
     # from mode, not a fixture param), so location-only registration is correct.
     'IDES8_MEM': {'io_tile': (81, 5), 'cfg_tile': (69, 0),
                   'sites_ttyp': 244},
+    # OSER4_MEM / IDES4_MEM = the 1:2-ratio (4:1) DDR write/read SerDes the OPEN LiteDRAM
+    # GW5DDRPHY instantiates (vs the -8 the encrypted vendor IP used).  Fuzzed 2026-07-10 via the
+    # same DDRDLL->DQS chain (apicula/fuzz/gw5ast/cells/oser4_mem.v, ides4_mem.v); the -4 variants
+    # occupy the SAME ttyp-244 IOLOGIC gearing sites as the -8 (co-located @ (81,5) DQS anchor),
+    # so they reuse the -8 cfg_tile + the same gearing param fuses.  Validated: the open DDR3 .fs
+    # (buzzy-fuzzy/openddr_bels/openddr_ddr3only.fs) places 20 OSER4_MEM + 16 IDES4_MEM.
+    'OSER4_MEM': {'io_tile': (81, 5), 'cfg_tile': (69, 0),
+                  'sites_ttyp': 244,
+                  'attrs': {
+                      'TXCLK_POL=1':      [(5, 39, 7)],
+                      'TCLK_SOURCE=DQSW': [(11, 79, 7)],
+                  }},
+    'IDES4_MEM': {'io_tile': (81, 5), 'cfg_tile': (69, 0),
+                  'sites_ttyp': 244},
+    # USB soft-PHY CDR SerDes (IDES16/OSER16/IDES8) — the standalone gw_sh softphy fixtures
+    # (hdl/usb2-soft-console/{src/softphy_bel_top.v,build_softphy_bel.sh}) place these at a NEW
+    # tile-type family: the CDR serdes cluster is ttyp-227 (row 82, cols 89-140).  xcvrselect
+    # (HS<->FS, softphy v0-vs-v4 = 27250 bits) is the major datapath axis; op_mode diffs are small
+    # (v0-vs-v1=172, v0-vs-v2=224).  LOCATION-only for now (bel site is what nextpnr needs); the
+    # HS/FS + op_mode param modes are the refinement.  See FUSES_EXTRACTED.md.
+    'USB_CDR_SERDES': {'io_tile': (82, 89), 'cfg_tile': (82, 89),
+                       'sites_ttyp': 227},
     # PLL trim — the fuzzed mid-array site @ tile (27,1).  ICP_SEL(6b)/LPF_RES(3b) are the
     # LOCK-quality fuses (fixes the auto-calc-wrong lock failure).  1 of 12 PLL sites.
     'PLL': {'io_tile': (27, 1), 'cfg_tile': (27, 1),
