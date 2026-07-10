@@ -788,8 +788,24 @@ def set_bpll_attrs(db, row, col, attrs):
         raise Exception(f"BPLL divider tuple ({idiv},{fbdiv},{mdiv}) not in "
                         f"fuzzed bit-table; add a gw_sh-measured entry")
     bits = set()
-    # static PLL power-up/base configuration (see _BPLL_BASE_BITS)
-    for tb in bt.get('base_bits', []):
+    # static PLL power-up/base configuration (see _BPLL_BASE_BITS).  The analog CP+LPF+VCO block is
+    # VCO-SPECIFIC, so select the base by the computed VCO (UG306E Fvco=Fclkin/IDIV*MDIV) when a
+    # VCO-keyed table is present; else fall back to the single baked base.  FCLKIN may be absent for
+    # fixed-config L/R tables (those have no base_by_vco) — default 50 MHz only matters for the lookup.
+    base_bits = bt.get('base_bits', [])
+    base_by_vco = bt.get('base_by_vco', None)
+    if base_by_vco:
+        try:
+            fclkin = float(str(attrs.get('FCLKIN', '50')).strip().strip('"'))
+        except (ValueError, TypeError):
+            fclkin = 50.0
+        vco = round(fclkin / idiv * mdiv)
+        if str(vco) in base_by_vco:
+            base_bits = base_by_vco[str(vco)]
+        else:  # nearest fuzzed band (loop-filter close within a band); approximate
+            nearest = min(base_by_vco, key=lambda v: abs(int(v) - vco))
+            base_bits = base_by_vco[nearest]
+    for tb in base_bits:
         bits.add((tb[0], tb[1], tb[2]))
     for c in bt['div_table'][key]:
         bits.add((0, prow, c))
