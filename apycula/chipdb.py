@@ -2316,6 +2316,28 @@ def _gtr_tap_bits(dat, table, want):
         if n >= want:
             return
 
+def _is_generic_routing_root(wire):
+    """True if `wire` is a generic directional routing wire that arch-gen's create_nodes()
+    puts into a node -- as either the root or a hop member. These wires are:
+      {N,S,E,W}{1,2,8}{idx}{seg}  (1/2/8-hop segments, e.g. E100, S272, W284, N188)
+      SN{idx}{seg} / EW{idx}{seg} (global cross wires)
+    Joining ANY of them into a GTR datapath node reroots a wire create_nodes already owns
+    -> nextpnr add_node "wire to multiple nodes" (E100@(0,27), S272@(103,93), ...). Skip them;
+    the .dat has thousands of non-directional (CLB LUT / mesh) taps to use instead.
+
+    Segment ranges create_nodes emits: 1-hop seg in {0,1}; 2-hop seg in {0,1,2}; 8-hop seg in
+    {0,4,8}. We accept any trailing-digit form so future segment additions stay covered."""
+    if not wire or len(wire) < 3:
+        return False
+    d = wire[0]
+    # {N,S,E,W}{1,2,8}{idx}{seg}: hop-count digit then all-digit index+segment tail
+    if d in 'NSEW' and wire[1] in '128' and wire[2:].isdigit():
+        return True
+    # SN{idx}{seg} / EW{idx}{seg} global cross wires
+    if wire[:2] in ('SN', 'EW') and wire[2:].isdigit():
+        return True
+    return False
+
 def _gtr_tap_wires(dat, tables):
     """Yield (wire_name, dlt_r, dlt_c) for every genuine fabric tap across the given .dat GTR
     tables. Used to give the DRIVEN FABRIC_* datapath pins real routable fabric wires (the
@@ -2338,7 +2360,12 @@ def _gtr_tap_wires(dat, tables):
             if key in seen:
                 continue
             seen.add(key)
-            yield (wnames.wirenames[wire_idx], dlt_r, dlt_c)
+            wire = wnames.wirenames[wire_idx]
+            if _is_generic_routing_root(wire):
+                # create_nodes() already roots this directional wire; joining it into a
+                # GTR node collides (E100@(0,27) "wire to multiple nodes"). Skip it.
+                continue
+            yield (wire, dlt_r, dlt_c)
 
 def fse_create_gtr(dev, device, fse, dat):
     """GW5AST-138C GTR12_QUAD transceiver bels.
@@ -2877,21 +2904,49 @@ def _fse_create_one_bottom_pll(dev, device, fse, dat, row, col):
 # REQUIRED to clock the whole fabric. Top-area sites only (rows < center): head tile +
 # 2 horizontal companions. Fuse tables silicon-measured (gw5ast_lr_pll, fixed 45MHz config).
 # (row, head_col, spine_side). LEFT head ttyp 74, RIGHT head ttyp 77.
-_LRPLL_SITES = [(27, 1, 'TL'), (27, 177, 'TR')]
+# GW5AST-138C left/right edge PLL sites. Per SITE_ENUMERATION.md (12-instance placement
+# fuzz + grid ttyp analysis, datasheet-confirmed 4 left + 4 right): each is a 3-tile
+# horizontal head group. Coordinates are GRID-VERIFIED from the fse ttyp map (74/75=LEFT
+# head, 77=RIGHT head, companions at +1/+2):
+#   LEFT  head col 1  @ rows 27/45/63/81 (ttyp 74@27,81; 75@45,63 -- both heads at col 1)
+#   RIGHT head col 177@ rows 27/81, col 178@ rows 45/63 (rightward 3-tile group fits 182-col grid)
+# SITE_ENUMERATION.md's (45,0)/(45,181)/(63,181) were imprecise; the grid dump shows the
+# ttyp-77/74 HEAD tiles are at the columns below.
+#   (row, head_col, side, pll_idx)
+#     side    : 'TL'/'TR' -> the spine-group prefix (TLPLL / TRPLL) these top-area sites feed.
+#     pll_idx : which of the side's TWO spine groups (PLL0 or PLL1) this site drives.
+# The clock spine exposes exactly TLPLL{0,1}CLK{0..3} + TRPLL{0,1}CLK{0..3} (clknames_5ast138c),
+# i.e. 2 groups per side for 4 sites/side. Site->group assignment (pll_idx) is the current
+# hypothesis (rows 27/45 -> group 0, rows 63/81 -> group 1); the 8-site spine fuzz
+# (fuzz_lr_pll_spine.sh) confirms per-site placement is distinct in the bitstream.
+_LRPLL_SITES = [
+    (27,   1, 'TL', 0), (45,   1, 'TL', 0),
+    (63,   1, 'TL', 1), (81,   1, 'TL', 1),
+    (27, 177, 'TR', 0), (45, 178, 'TR', 0),
+    (63, 178, 'TR', 1), (81, 177, 'TR', 1),
+]
 
 def fse_create_lr_plls(dev, device, fse, dat):
-    """GW5AST-138C top-area left/right PLL bels (2x) feeding TL0/TR0 spine groups."""
+    """GW5AST-138C top-area left/right PLL bels (8x) feeding TLPLL{0,1}/TRPLL{0,1} spine groups.
+
+    All 8 datasheet L/R PLL sites (4 left + 4 right) are modeled. Each reuses the bottom-PLL
+    'bpll' extra_func schema (gowin_pack.set_bpll_attrs) with L/R geometry (3 tiles, config
+    row 20). Node/spine names are qualified per (side, pll_idx, row, col) so the 8 instances
+    never collide."""
     if device not in {'GW5AST-138C'}:
         return
-    for row, col, side in _LRPLL_SITES:
+    for row, col, side, pll_idx in _LRPLL_SITES:
         base = gw5ast_lr_pll._LPLL_BASE_BITS if side == 'TL' else gw5ast_lr_pll._RPLL_BASE_BITS
         divc = gw5ast_lr_pll._LPLL_DIV_1_1_18 if side == 'TL' else gw5ast_lr_pll._RPLL_DIV_1_1_18
-        _fse_create_one_lr_pll(dev, dat, row, col, side, base, divc)
+        _fse_create_one_lr_pll(dev, dat, row, col, side, pll_idx, base, divc)
 
-def _fse_create_one_lr_pll(dev, dat, row, col, side, base_bits, div_cols):
+def _fse_create_one_lr_pll(dev, dat, row, col, side, pll_idx, base_bits, div_cols):
     """Build ONE L/R PLL bel at (row, col). Reuses the bottom-PLL extra_func['bpll']
     schema so gowin_pack.set_bpll_attrs handles it unchanged; only the geometry (3 tiles,
-    config row 20) and spine group (TL0/TR0) differ. Fixed config (IDIV1/FBDIV1/MDIV18)."""
+    config row 20) and spine group ({side}PLL{pll_idx}) differ. Fixed config (IDIV1/FBDIV1/MDIV18).
+
+    All node names carry an X{col}Y{row}/ coordinate prefix so the 8 L/R sites never collide,
+    and the spine node is {side}PLL{pll_idx}CLK<n> (parameterized, not the old hardcoded PLL0)."""
     extra = dev.extra_func.setdefault((row, col), {})
     bpll = extra.setdefault('bpll', {})
     # 3-tile horizontal group (head + 2 companions), unlike the bottom edge's 4.
@@ -2922,8 +2977,9 @@ def _fse_create_one_lr_pll(dev, dat, row, col, side, base_bits, div_cols):
             inputs[nam] = alias
             dev.nodes.setdefault(f'X{col}Y{row}/{alias}', ('PLL_I', {(row, col, alias)}))[1].add((wrow, wcol, wire))
 
-    # CLKOUT0..3 enter the global spine via the TL0/TR0 group (PLL0; these top sites are
-    # the first of their side). Same mechanism the bottom edge uses for BL/BR.
+    # CLKOUT0..3 enter the global spine via this site's {side}PLL{pll_idx} group. The clock
+    # spine exposes TLPLL{0,1}CLK<n> + TRPLL{0,1}CLK<n> (clknames_5ast138c): 2 groups per side,
+    # so pll_idx selects which one. (Same mechanism the bottom edge uses for BL/BR PLL0.)
     outputs = bpll.setdefault('outputs', {})
     for idx, nam in _bpll_outputs:
         wire_idx = dat.gw5aStuff['PllOut'][idx]
@@ -2932,12 +2988,14 @@ def _fse_create_one_lr_pll(dev, dat, row, col, side, base_bits, div_cols):
             continue
         wire = wt[wire_idx]
         wrow, wcol = row, col + dlt
+        # Bel-output wire is tile-local (bare name), distinct per head tile -> no cross-site
+        # collision even unqualified. Only the spine + PLL_O NODE keys need qualifying (below).
         outputs[nam] = f'BPLLOUT{nam}'
         dev.wire_delay[outputs[nam]] = 'X0'
         logic_wire = wire if wcol == col else f'{side}PLL{nam}{wire}'
         m = re.match(r'CLKOUT([0-3])$', nam)
         if m:
-            spine_node = f'{side}PLL0CLK{m.group(1)}'
+            spine_node = f'{side}PLL{pll_idx}CLK{m.group(1)}'
             dev.nodes.setdefault(spine_node, ('GLOBAL_CLK', set()))[1].add((row, col, outputs[nam]))
         else:
             dev.nodes.setdefault(f'X{col}Y{row}/{side}PLL{nam}', ('PLL_O', set()))[1].add((row, col, outputs[nam]))
@@ -4830,18 +4888,37 @@ _GW5AST_FUZZED_CELLS = {
                   'sites_ttyp': 244},
     # USB soft-PHY CDR SerDes (IDES16/OSER16/IDES8) — the standalone gw_sh softphy fixtures
     # (hdl/usb2-soft-console/{src/softphy_bel_top.v,build_softphy_bel.sh}) place these at a NEW
-    # tile-type family: the CDR serdes cluster is ttyp-227 (row 82, cols 89-140).  xcvrselect
-    # (HS<->FS, softphy v0-vs-v4 = 27250 bits) is the major datapath axis; op_mode diffs are small
-    # (v0-vs-v1=172, v0-vs-v2=224).  LOCATION-only for now (bel site is what nextpnr needs); the
-    # HS/FS + op_mode param modes are the refinement.  See FUSES_EXTRACTED.md.
+    # tile-type family: the CDR serdes cluster is ttyp-227 (row 82, cols 89-140).
+    #
+    # HS/FS + op_mode axes (softphy fuzz run_v0..v4, xcvrselect/op_mode swept as UTMI constants):
+    #   v0: op_mode=0 xcvrselect=0 (HS baseline)   v4: op_mode=0 xcvrselect=1 (FS)
+    #   v1/v2/v3: op_mode=1/2/3, xcvrselect=0
+    # Measured .fs XOR diffs (diff_bits.py, 2026-07-10):
+    #   HS<->FS  (v0-v4): 27250 bits over 126 bit-rows, CONCENTRATED at rows 1173-1180 (~1000
+    #            bits/row) with a long fabric tail.  xcvrselect is a UTMI *runtime input pin*, not
+    #            a bel fuse: the soft-PHY re-synthesizes datapath logic for FS vs HS, so the diff is
+    #            mostly FABRIC, not a compact CDR-tile mode field.  Do NOT model it as an attr-fuse.
+    #   op_mode  (v0-v1): 172 bits, TIGHT (22 bit-rows, 1157-1167); (v0-v2)=224.  Also a UTMI input;
+    #            the small localized diff is the constant tie-off + normal/non-driving/loopback mux.
+    # => op_mode[1:0] / xcvrselect[1:0] are exposed as UTMI CONTROL INPUT PINS on the bel (driven
+    #    by the soft-PHY's UTMI FSM at runtime), NOT as chipdb param-fuse modes.  'utmi_pins' records
+    #    the control axis + the measured fuse-region locality for a future pin<->wire portmap trace.
+    #    The bel LOCATION (sites_ttyp 227) remains what nextpnr needs to place the CDR.
     'USB_CDR_SERDES': {'io_tile': (82, 89), 'cfg_tile': (82, 89),
-                       'sites_ttyp': 227},
+                       'sites_ttyp': 227,
+                       # UTMI control inputs (runtime pins, width in bits) + measured diff character.
+                       'utmi_pins': {
+                           'OP_MODE':    {'width': 2, 'diff_bits': 172, 'diff_rows': (1157, 1167),
+                                          'kind': 'local'},
+                           'XCVRSELECT': {'width': 2, 'diff_bits': 27250, 'diff_rows': (1173, 1180),
+                                          'kind': 'soft_fabric'},  # HS<->FS, fabric-dominated
+                       }},
     # PLL trim — the fuzzed mid-array site @ tile (27,1).  ICP_SEL(6b)/LPF_RES(3b) are the
     # LOCK-quality fuses (fixes the auto-calc-wrong lock failure).  1 of 12 PLL sites.
     'PLL': {'io_tile': (27, 1), 'cfg_tile': (27, 1),
             # The 12 PLL sites (datasheet-validated): 4 left + 4 right + 4 bottom.
-            'sites': [(27, 1), (45, 0), (63, 0), (81, 1),           # left edge
-                      (27, 177), (45, 181), (63, 181), (81, 177),  # right edge
+            'sites': [(27, 1), (45, 1), (63, 1), (81, 1),           # left edge (grid-verified heads)
+                      (27, 177), (45, 178), (63, 178), (81, 177),  # right edge (grid-verified heads)
                       (108, 28), (108, 32), (108, 146), (108, 150)],# bottom BPLL
             'attrs': {
                 'ICP_SEL': [(20, c, 7) for c in range(41, 47)],   # 6-bit charge-pump (LOCK trim)
