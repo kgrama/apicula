@@ -19,6 +19,14 @@ Fixtures from de-vendored controller (vendor-correct ports). All confirmed.
   point — dly1/2/4/8/16/32/64 -> 1 bit each; dly3/6/12 -> 2; dly127 -> all 7 (exact match).
   0->40  : cols 135503,135519          (= w32 + w8 = 40 ✓ binary, not a thermometer prefix)
   0->127 : cols 135495,135503,135511,135519,135527,135535,135543 (full field)
+- DYN_DLY_EN / ADAPT_EN: **NOT config fuses — do not try to reduce them to (row,col,bit) attrs.**
+  fuzz_ddr_iodelay_params.sh (cells/iodelay_params.v, one param flipped at a time vs a baseline):
+  FALSE->TRUE moves **189 / 191 bits across 32 rows (1419..1512)** — i.e. flipping them
+  INSTANTIATES the dynamic/adaptive delay HARDWARE (tap counters/FSM, ~90 bits clustered at rows
+  1491-1500), not a mode bit.  Location-only/no-attr is the CORRECT model.  Not on the open-DDR
+  critical path either: the open LiteDRAM GW5DDRPHY hardwires DYN_DLY_EN="FALSE" ADAPT_EN="FALSE"
+  and ties DLYSTEP/SDTAP/VALUE to 0 (gw5ddrphy.py:211-217) — only C_STATIC_DLY (=cmd_delay) varies.
+  => the IODELAY bel model is COMPLETE for real use.
 
 ## DQS (bel @ row 1011)
 - DQS_MODE     X4->X2_DDR3 : [1011,639]
