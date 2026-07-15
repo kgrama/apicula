@@ -1099,8 +1099,24 @@ def gw5_make_hclk_pips(dev, device, fse, dat: Datfile):
             hclk_idx = gw5_hclk_idx(dev, device, row, col)
             if hclk_idx >= 0:
                 if 48 in fse[ttyp]['wire']:
+                    # GW5AST-138C per-HCLK-line enable fuse: gw_sh sets ONE extra fuse per HCLK
+                    # line in use, beyond the mux-chain pips.  Decoded from silicon-proven
+                    # bitstreams (openddr_ddr3only.fs: line 2 @ (27,0) fuse (3,5), line 0 @
+                    # (81,0) fuse (9,7); softphy_v0.fs: line 0 @ (81,181) fuse (9,128)) -- in
+                    # every case exactly the fuse of the table-48 entry (68+j) -> (64+j) for the
+                    # active line j, with the full active fuse set then 100%% explained.  Fold it
+                    # into the HCLK_MUX_BETA -> HCLK_BUF_BI pip (34+j -> 56+j), the line-specific
+                    # entry on the same path, so gowin_pack emits it whenever the line is routed.
+                    line_en_fuses = {}
+                    if device == 'GW5AST-138C':
+                        for srcid, destid, *fuses in fse[ttyp]['wire'][48]:
+                            if destid - srcid == -4 and srcid in range(68, 72):
+                                line_en_fuses[srcid - 68] = {fuse.fuse_lookup(fse, ttyp, f, device)
+                                                             for f in unpad(fuses)}
                     for srcid, destid, *fuses in fse[ttyp]['wire'][48]:
                         fuses = {fuse.fuse_lookup(fse, ttyp, f, device) for f in unpad(fuses)}
+                        if srcid in range(34, 38) and destid == srcid + 22 and (srcid - 34) in line_en_fuses:
+                            fuses = fuses | line_en_fuses[srcid - 34]
                         # HCLK wires
                         if srcid < hclk_off:
                             if srcid in range(104, 108): # CLKDIV outputs
