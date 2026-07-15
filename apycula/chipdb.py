@@ -4866,9 +4866,11 @@ _GW5AST_FUZZED_CELLS = {
     # OSER8_MEM / IDES8_MEM = the DDR write/read 8:1 SerDes (IOLOGIC in MEM-gearing mode).
     # Fuzzed via the DDRDLL->DQS->{OSER8_MEM,IDES8_MEM} chain (apicula/fuzz/gw5ast/cells/
     # oser8_mem.v, ides8_mem.v).  gridwalk: the SerDes-unique fuses land on the ttyp-244
-    # IO-logic config tiles (48 of them, the DDR byte-lane IOLOGIC sites on cols 0/181),
-    # co-located with the DQS strobe anchor @ (81,5 ttyp241).  So both register as
-    # placeable bels at ALL ttyp-244 lanes (like SDPB uses sites_ttyp=40 for BSRAM heads).
+    # IO-logic config tiles (48 of them, the DDR byte-lane IOLOGIC sites on COL 0 ONLY, rows
+    # 2-107 -- col 181 at those rows is ttyp-246/245, NOT another set of ttyp-244 tiles;
+    # grid-verified, corrects an earlier "cols 0/181" comment). co-located with the DQS
+    # strobe anchor @ (81,5 ttyp241).  So both register as placeable bels at ALL ttyp-244
+    # lanes (like SDPB uses sites_ttyp=40 for BSRAM heads).
     # Param fuses (HWL/TCLK_SOURCE/TXCLK_POL) are differential-extractable later; the bel
     # LOCATION is what nextpnr needs to place the DDR3 PHY.
     # OSER8_MEM param fuses are DIFFERENTIAL-EXTRACTED (apicula/fuzz/gw5ast/cells/
@@ -4902,7 +4904,11 @@ _GW5AST_FUZZED_CELLS = {
                   'sites_ttyp': 244},
     # USB soft-PHY CDR SerDes (IDES16/OSER16/IDES8) — the standalone gw_sh softphy fixtures
     # (hdl/usb2-soft-console/{src/softphy_bel_top.v,build_softphy_bel.sh}) place these at a NEW
-    # tile-type family: the CDR serdes cluster is ttyp-227 (row 82, cols 89-140).
+    # tile-type family: the CDR serdes cluster is ttyp-227, rows {64, 82, 100}, cols 91-144
+    # (grid-verified; corrects an earlier "row 82, cols 89-140" comment -- that range actually
+    # straddles the 226/227 boundary at col 90/91, and (82,89) below was on the WRONG side:
+    # ttyp-226, not 227). ttyp-226 is a distinct, cols-37-90 tile family at the same 3 rows
+    # (same site count, 162) -- unrelated to the CDR cluster, not modelled here.
     #
     # HS/FS + op_mode axes (softphy fuzz run_v0..v4, xcvrselect/op_mode swept as UTMI constants):
     #   v0: op_mode=0 xcvrselect=0 (HS baseline)   v4: op_mode=0 xcvrselect=1 (FS)
@@ -4918,7 +4924,11 @@ _GW5AST_FUZZED_CELLS = {
     #    by the soft-PHY's UTMI FSM at runtime), NOT as chipdb param-fuse modes.  'utmi_pins' records
     #    the control axis + the measured fuse-region locality for a future pin<->wire portmap trace.
     #    The bel LOCATION (sites_ttyp 227) remains what nextpnr needs to place the CDR.
-    'USB_CDR_SERDES': {'io_tile': (82, 89), 'cfg_tile': (82, 89),
+    # io_tile re-anchored (82,89)->(82,91): (82,89) is ttyp-226 (wrong side of the boundary);
+    # (82,91) is the first real ttyp-227 tile on that row and is a member of sites_ttyp's own
+    # fold, so (per the Fix-3 phantom-bel guard) it registers as a normal in-set site, not a
+    # separate phantom bel.
+    'USB_CDR_SERDES': {'io_tile': (82, 91), 'cfg_tile': (82, 91),
                        'sites_ttyp': 227,
                        # UTMI control inputs (runtime pins, width in bits) + measured diff character.
                        'utmi_pins': {
@@ -4942,17 +4952,50 @@ _GW5AST_FUZZED_CELLS = {
                 'ODIV0_FRAC_SEL': [(20, 99, 7)],   # fractional output divider
                 'SSC_EN':         [(20, 5, 7)],    # spread-spectrum enable
             }},
+    # DHCE(CLKIN,CEN,CLKOUT) — dynamic HCLK-enable gate (yosys cells_xtra_gw5a.v:1196). NOT the
+    # same primitive as nextpnr's internal DHCEN mechanism: DHCEN there is an auto-synthesized
+    # global-clock-network gate (nextpnr pack.cc pack_dhcens()/globals.cc route_dhcen_net(), keyed
+    # off the fuzzed _dhcen_ce CE-wire->HCLK-mux table) that is NEVER created from a user RTL
+    # instance. DHCE is what LiteX's CRG instantiates directly (sipeed_tang_mega_138k_{l96,cfu,
+    # pro,pllcov}.py, gating cd_sys2x off cd_sys2x_i during DDR3 PHY calibration pause).
+    # SCOPE DECISION: the real dynamic-gating hardware (a CE wire routed into one of the per-side
+    # HCLK input muxes, chipdb.py:3007 fse_create_dhcen's method) needs an IDE routing trace this
+    # fix does NOT attempt — _dhcen_ce/_hclk_to_fclk have no GW5AST-138C entry and fabricating one
+    # would be a guessed fuse, which the audit explicitly forbids. Modelled instead as a location-
+    # only PASS-THROUGH bel (CLKIN wired through to CLKOUT in silicon terms; CEN accepted as a real
+    # cell/bel pin so Context::check and the packer are satisfied, but there is no fuse behind it —
+    # the gate is effectively always-enabled). This is SAFE for the two known consumers: both use
+    # DHCE only to blip cd_sys2x during init calibration pause (self.init.pause), not as a
+    # steady-state clock gate, so an always-enabled DHCE means the pause has no effect — a
+    # functional gap, not a routing hazard. Anchored at the same (108,165) control tile GSR uses
+    # (fse_create_gsr): unrelated function, but it is a real, always-present, non-IO-strobe tile
+    # good for a singleton control cell, so this is not a phantom site the way Fix 3 warns about.
+    # Only one DHCE bel is created (every known consumer instantiates exactly one).
+    'DHCE': {'io_tile': (108, 165), 'cfg_tile': (108, 165)},
 }
 def fse_create_gw5ast_fuzzed_cells(dev, device):
     if device != 'GW5AST-138C':
         return
     for cell, info in _GW5AST_FUZZED_CELLS.items():
         io_row, io_col = info['io_tile']
-        # register the bel at its I/O-strobe anchor tile
-        extra = dev.extra_func.setdefault((io_row, io_col), {})
-        fz = extra.setdefault('fuzzed', {})
-        fz[cell] = {'io_tile': [io_row, io_col],
-                    'cfg_tile': list(info.get('cfg_tile', info['io_tile']))}
+        # For multi-site cells (sites_ttyp set), the io_tile anchor must itself be a member of
+        # that ttyp set, or this unconditional registration creates a PHANTOM bel at a site that
+        # doesn't exist there (e.g. OSER4_MEM/IDES4_MEM/OSER8_MEM/IDES8_MEM/USB_CDR_SERDES: their
+        # io_tile sits in a DIFFERENT tile type than the one sites_ttyp folds — see the Fix-3 audit).
+        # DQS/IODELAY/SDPB/DSP are clean (io_tile is inside their own site set) and unaffected.
+        # Assert loudly rather than silently skip: a wrong anchor here is a modelling bug, not a
+        # thing to paper over.
+        st = info.get('sites_ttyp')
+        if st is not None and dev.grid[io_row][io_col] != st:
+            print(f"WARNING: {cell} io_tile anchor ({io_row},{io_col}) is ttyp-{dev.grid[io_row][io_col]}, "
+                  f"not sites_ttyp-{st} -- skipping the io_tile registration (phantom-bel guard); "
+                  f"the cell is still placeable via its {st}-ttyp sites below.")
+        else:
+            # register the bel at its I/O-strobe anchor tile
+            extra = dev.extra_func.setdefault((io_row, io_col), {})
+            fz = extra.setdefault('fuzzed', {})
+            fz[cell] = {'io_tile': [io_row, io_col],
+                        'cfg_tile': list(info.get('cfg_tile', info['io_tile']))}
         # register param-config fuses at the config tile, keyed by attr -> local bits
         attrs = info.get('attrs', {})
         if attrs:
