@@ -4821,7 +4821,11 @@ _GW5AST_FUZZED_CELLS = {
     #         'attrs': { 'PARAM=VAL': [(local_brow, local_bcol, bitpos), ...] } }
     # Coords from byte-col gridwalk (BEL_LOCATIONS.md) + re-extracted param differentials
     # (byte frame).  DQS spans tiles: I/O strobe @ (81,5 ttyp241), CONFIG @ (72,0 ttyp64).
+    # DQS: the read-strobe block, one per DDR byte lane.  ttyp-241 = the DQS site (8 on the grid);
+    # registering only the fuzzed io_tile made it a SINGLE-site bel, so a 2-byte-lane DDR3 PHY
+    # (2x DQS) failed with "Unable to place cell 'DQS', no BELs remaining".  sites_ttyp folds all 8.
     'DQS':  {'io_tile': (81, 5), 'cfg_tile': (72, 0),
+             'sites_ttyp': 241,
              'attrs': {
                  'DQS_MODE=X2_DDR3': [(20, 79, 7)],          # vs X4 baseline
                  'HWL=false':        [(20, 103, 7)],          # vs true
@@ -4852,7 +4856,10 @@ _GW5AST_FUZZED_CELLS = {
     # Silicon frame: global row 1511, byte-cols 16936..16942, bitpos 7 — 7 CONSECUTIVE byte-cols,
     # and the LSB sits at the HIGHEST col (16942=weight1 ... 16936=weight64), so the weight order
     # is REVERSED vs a naive ascending range().  Tile-local: row 20, cols 0..6, bitpos 7.
+    # ttyp-247 = the IODELAY site (48 on the grid).  Registering only the fuzzed io_tile made it a
+    # SINGLE-site bel; the open LiteDRAM GW5DDRPHY instantiates 26 -> "no BELs remaining".
     'IODELAY': {'io_tile': (108, 141), 'cfg_tile': (108, 141),
+                'sites_ttyp': 247,
                 'attrs': {  # index i = bit weight 2**i; col 6-i (LSB at the highest col)
                     'C_STATIC_DLY': [(20, 6 - i, 7) for i in range(7)],
                 }},
