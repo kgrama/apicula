@@ -3245,6 +3245,14 @@ def fse_iologic(device, fse, ttyp):
     if device in {'GW1N-9', 'GW1N-9C'} and ttyp in {52, 66, 63, 91, 92}:
             bels['OSER16'] = Bel()
             bels['IDES16'] = Bel()
+    if device in {'GW5AST-138C'} and ttyp in {245, 246}:
+            # See fse_create_io16's GW5AST-138C branch: OSER16/IDES16 DO exist on this device
+            # (silicon-confirmed via the vendor USB HS soft-PHY IP), grid-verified at ttyp 245/246
+            # (right edge, col dev.cols-1). This Bel() creation is the OTHER half of that fix --
+            # dat_portmap() (below, name.startswith("OSER16")/("IDES16")) fills in the real portmap
+            # generically from the .dat wire tables once these exist, same as every other device.
+            bels['OSER16'] = Bel()
+            bels['IDES16'] = Bel()
     return bels
 
 # create clock aliases
@@ -4178,6 +4186,23 @@ def fse_create_io16(dev, device):
             if i < 17:
                 df.setdefault((i, dev.cols - 1), {})['io16'] = {'role': 'MAIN', 'pair': (1, 0)}
                 df.setdefault((i + 1, dev.cols - 1), {})['io16'] = {'role': 'AUX', 'pair': (-1, 0)}
+    elif device in {'GW5AST-138C'}:
+        # OSER16/IDES16 DO exist on GW5AST-138C -- the earlier "only in three chips, doesn't exist
+        # in the latest series" note above was true for the fuzzed devices at the time but wrong for
+        # this one: the vendor's own USB2.0 HS soft-PHY IP (ipcore/USBTwoSoftPHY, de-vendored via
+        # gw_sh -u.vg, see hdl/usb2-soft-console/fuzz_softphy/) instantiates one OSER16 (tx bit
+        # serializer) and one IDES16 (unused by this IP variant but the primitive is present) as
+        # part of its HS CDR SerDes. nextpnr placed the vendor's OSER16 at row 79 -> the grid ttyp
+        # there (245) was previously unregistered for io16 (no chipdb entry -> "can not be placed").
+        # Grid-verified (fse['header']['grid'][61]): right edge, col dev.cols-1, ttyp-245 (MAIN,
+        # shortval 21/22 = IOLOGICA/B) at odd rows, ttyp-246 (AUX, same shortval) at row+1, strictly
+        # alternating with bank-boundary gaps every 9 rows (skip 9,10 / 27,28 / 45,46 / 63,64 / 81,82
+        # / 99,100). Every (r, r+1) 245/246 pair checked programmatically -- no exceptions.
+        for i in chain(range(1, 8, 2), range(12, 17, 2), range(19, 26, 2), range(30, 35, 2),
+                       range(37, 44, 2), range(48, 53, 2), range(55, 62, 2), range(66, 71, 2),
+                       range(73, 80, 2), range(84, 89, 2), range(91, 98, 2), range(102, 107, 2)):
+            df.setdefault((i, dev.cols - 1), {})['io16'] = {'role': 'MAIN', 'pair': (1, 0)}
+            df.setdefault((i + 1, dev.cols - 1), {})['io16'] = {'role': 'AUX', 'pair': (-1, 0)}
 
 # (osc-type, devices) : ({local-ports}, {aliases})
 _osc_ports = {('OSCZ', 'GW1NZ-1'): ({}, {'OSCOUT' : (0, 5, 'OF3'), 'OSCEN': (0, 2, 'A6')}),
@@ -5620,13 +5645,25 @@ def dat_portmap(dat, dev, device):
                         # very easy to determine whether we are dealing with
                         # the main IOLOGIC cell—if there are IOB bels, then it
                         # is the main one.
-                        if 'IOBB' in tile.bels:
-                            r_off, c_off = tile.bels['IOBB'].fuse_cell_offset
+                        #
+                        # GW5AST-138C io16 AUX tiles (ttyp-246, dat char '1' not 'I') have an
+                        # IOLOGICA bel (added for the OSER16/IDES16 AUX-cell fix) but NO IOBA/IOBB
+                        # -- 'IOBB' in tile.bels used to gate this WHOLE block, so buf=='A'
+                        # processing (which never touches r_off/c_off -- that's only used by the
+                        # buf=='B' cross-tile renaming below) was needlessly skipped too, leaving
+                        # PCLK/FCLK entirely absent from the portmap ("invalid sink port ...PCLK").
+                        # r_off/c_off are now looked up lazily, only where buf=='B' actually needs
+                        # them, so buf=='A' AUX tiles get their (offset-free) portmap regardless.
+                        has_iobb = 'IOBB' in tile.bels
+                        if has_iobb or buf == 'A':
+                            def _iobb_offset():
+                                return tile.bels['IOBB'].fuse_cell_offset
                             for idx, nam in _iologic_inputs:
                                 w_idx = dat.compat_dict[f'Iologic{buf}In'][idx]
                                 if w_idx >= 0:
                                     wire = wnames.wirenames[w_idx]
-                                    if buf == 'B':
+                                    if buf == 'B' and has_iobb:
+                                        r_off, c_off = _iobb_offset()
                                         node_wire = wire
                                         wire = f'IOLOGIC{wire}'
                                         node_name = f'X{row + r_off}Y{col + c_off}/{node_wire}'
@@ -5640,32 +5677,47 @@ def dat_portmap(dat, dev, device):
                                 w_idx = dat.compat_dict[f'Iologic{buf}Out'][idx]
                                 if w_idx >= 0:
                                     wire = wnames.wirenames[w_idx]
-                                    if buf == 'B':
+                                    if buf == 'B' and has_iobb:
+                                        r_off, c_off = _iobb_offset()
                                         node_wire = wire
                                         wire = f'IOLOGIC{wire}'
                                         node_name = f'X{row + r_off}Y{col + c_off}/{node_wire}'
                                         add_node(dev, node_name, "IO_I", row, col, wire)
                                         add_node(dev, node_name, "IO_I", row + r_off, col + c_off, node_wire)
                                     bel.portmap[nam] = wire
-                            # D8-D15 are placed in paired cell
-                            pair = {'A': 'B', 'B': 'A'}[buf]
-                            for idx, nam in _iologic_inputs:
-                                if nam not in {'D0', 'D1', 'D2', 'D3', 'D4', 'D5', 'D6', 'D7'}:
-                                    continue
-                                w_idx = dat.compat_dict[f'Iologic{pair}In'][idx]
-                                if w_idx >= 0:
-                                    wire = wnames.wirenames[w_idx]
-                                    if buf == 'A':
-                                        node_wire = wire
-                                        wire = f'IOLOGIC{wire}'
-                                        node_name = f'X{row + r_off}Y{col + c_off}/{node_wire}'
-                                        add_node(dev, node_name, "IO_I", row, col, wire)
-                                        add_node(dev, node_name, "IO_I", row + r_off, col + c_off, node_wire)
-                                    bel.portmap[f'D{int(nam[-1]) + 8}'] = wire
+                            # D8-D15 are placed in paired cell (needs the real cross-tile IOBB
+                            # offset -- AUX tiles with no IOBB skip this, same as before)
+                            if has_iobb:
+                                r_off, c_off = _iobb_offset()
+                                pair = {'A': 'B', 'B': 'A'}[buf]
+                                for idx, nam in _iologic_inputs:
+                                    if nam not in {'D0', 'D1', 'D2', 'D3', 'D4', 'D5', 'D6', 'D7'}:
+                                        continue
+                                    w_idx = dat.compat_dict[f'Iologic{pair}In'][idx]
+                                    if w_idx >= 0:
+                                        wire = wnames.wirenames[w_idx]
+                                        if buf == 'A':
+                                            node_wire = wire
+                                            wire = f'IOLOGIC{wire}'
+                                            node_name = f'X{row + r_off}Y{col + c_off}/{node_wire}'
+                                            add_node(dev, node_name, "IO_I", row, col, wire)
+                                            add_node(dev, node_name, "IO_I", row + r_off, col + c_off, node_wire)
+                                        bel.portmap[f'D{int(nam[-1]) + 8}'] = wire
 
                 elif name.startswith("OSER16"):
+                    # dat.portmap['IologicAIn'] (the non-family-specific table) is ENTIRELY -1 for
+                    # every OSER16/IDES16 input on GW5AST-138C -- not selectively missing a few
+                    # ports, the whole table is dead here. dat.compat_dict['IologicAIn'] is the
+                    # real, populated table for GW5 family devices (same one the general IOLOGICA/
+                    # IOLOGICB branch above already uses via is_GW5_family gating for its output
+                    # loop); OSER16/IDES16 are always the 'A' slot (no IOLOGICB-associated variant
+                    # exists), so index directly rather than trust a possibly-stale `buf` from a
+                    # sibling loop iteration. FCLK (idx 20) is genuinely -1 even in compat_dict (same
+                    # as the general IOLOGIC branch's own FCLK special-case) -- keep the dummy pip
+                    # fallback for that one only.
+                    in_table = dat.portmap['IologicAIn'] if not is_GW5_family(device) else dat.compat_dict['IologicAIn']
                     for idx, nam in _oser16_inputs:
-                        w_idx = dat.portmap[f'IologicAIn'][idx]
+                        w_idx = in_table[idx]
                         if w_idx >= 0:
                             bel.portmap[nam] = wnames.wirenames[w_idx]
                         elif nam == 'FCLK':
@@ -5677,8 +5729,10 @@ def dat_portmap(dat, dev, device):
                             bel.portmap[nam] = wnames.wirenames[w_idx]
                     bel.portmap.update(_oser16_fixed_inputs)
                 elif name.startswith("IDES16"):
+                    # see OSER16's identical in_table fix above for why.
+                    in_table = dat.portmap['IologicAIn'] if not is_GW5_family(device) else dat.compat_dict['IologicAIn']
                     for idx, nam in _ides16_inputs:
-                        w_idx = dat.portmap[f'IologicAIn'][idx]
+                        w_idx = in_table[idx]
                         if w_idx >= 0:
                             bel.portmap[nam] = wnames.wirenames[w_idx]
                         elif nam == 'FCLK':
