@@ -11,8 +11,13 @@ Fixtures from de-vendored controller (vendor-correct ports). All confirmed.
 - DLL_FORCE FALSE->true    : [19,495]
 
 ## IODELAY (bel @ row 1511)
-- C_STATIC_DLY: thermometer field, row 1511, cols 135495..135543 step 8 (7 bits)
-  0->40  : cols 135503,135519
+- C_STATIC_DLY: **7-bit BINARY-weighted** field (NOT thermometer — earlier note was wrong),
+  row 1511, bit-cols 135495..135543 step 8 (= byte-cols 16936..16942, bitpos 7; tile-local row 20
+  cols 0..6).  **LSB is at the HIGHEST col**: 135543=w1, 135535=w2, 135527=w4, 135519=w8,
+  135511=w16, 135503=w32, 135495=w64.
+  PROVEN by the 20-point sweep (fuzz_ddr_iodelay.sh): diff-bit COUNT == popcount(value) at every
+  point — dly1/2/4/8/16/32/64 -> 1 bit each; dly3/6/12 -> 2; dly127 -> all 7 (exact match).
+  0->40  : cols 135503,135519          (= w32 + w8 = 40 ✓ binary, not a thermometer prefix)
   0->127 : cols 135495,135503,135511,135519,135527,135535,135543 (full field)
 
 ## DQS (bel @ row 1011)

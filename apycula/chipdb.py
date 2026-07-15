@@ -4845,9 +4845,16 @@ _GW5AST_FUZZED_CELLS = {
                    'SCAL_EN=true': [(19, 72, 7)],
                    'DLL_FORCE=true': [(19, 61, 7)],
                }},
+    # IODELAY: C_STATIC_DLY (static delay tap 0..127) is a 7-bit **BINARY-weighted** field —
+    # NOT a thermometer (the earlier note was wrong).  Proven by the 20-point sweep
+    # fuzz/gw5ast/fuzz_ddr_iodelay.sh: the .fs-diff bit COUNT == popcount(value) for every point
+    # (dly1/2/4/8/16/32/64 -> 1 bit each; dly3/6/12 -> 2; dly127 -> all 7, exact match).
+    # Silicon frame: global row 1511, byte-cols 16936..16942, bitpos 7 — 7 CONSECUTIVE byte-cols,
+    # and the LSB sits at the HIGHEST col (16942=weight1 ... 16936=weight64), so the weight order
+    # is REVERSED vs a naive ascending range().  Tile-local: row 20, cols 0..6, bitpos 7.
     'IODELAY': {'io_tile': (108, 141), 'cfg_tile': (108, 141),
-                'attrs': {  # C_STATIC_DLY 7-bit thermometer field @ local (20, 0..6)
-                    'C_STATIC_DLY': [(20, i, 7) for i in range(7)],
+                'attrs': {  # index i = bit weight 2**i; col 6-i (LSB at the highest col)
+                    'C_STATIC_DLY': [(20, 6 - i, 7) for i in range(7)],
                 }},
     # OSER8_MEM / IDES8_MEM = the DDR write/read 8:1 SerDes (IOLOGIC in MEM-gearing mode).
     # Fuzzed via the DDRDLL->DQS->{OSER8_MEM,IDES8_MEM} chain (apicula/fuzz/gw5ast/cells/
