@@ -3084,9 +3084,10 @@ def _fse_create_one_bottom_pll(dev, device, fse, dat, row, col):
 # i.e. 2 groups per side for 4 sites/side. Site->group assignment (pll_idx) is the current
 # hypothesis (rows 27/45 -> group 0, rows 63/81 -> group 1); the 8-site spine fuzz
 # (fuzz_lr_pll_spine.sh) confirms per-site placement is distinct in the bitstream.
+# Rows 45/63: the IDIV/FBDIV PLL table is on col 0 (ttyp 268/270), companions 75/76 at cols 1/2.
 _LRPLL_SITES = [
-    (27,   1, 'TL', 0), (45,   1, 'TL', 0),
-    (63,   1, 'TL', 1), (81,   1, 'TL', 1),
+    (27,   1, 'TL', 0), (45,   0, 'TL', 0),
+    (63,   0, 'TL', 1), (81,   1, 'TL', 1),
     (27, 177, 'TR', 0), (45, 178, 'TR', 0),
     (63, 178, 'TR', 1), (81, 177, 'TR', 1),
 ]
@@ -4376,6 +4377,16 @@ _segment_data = {
                      'top_gate_wires':    [[('A6', 'A7'), (None, None), (None, None)], [('B6', 'B7'), None, None]],
                      'bottom_gate_wires': [[(None, 'B7'), (None, 'B7'), ('A6', 'A7')], [None, None, ('B6', 'B7')]],
                      'reserved_wires': {}},
+        # GW5AST-138C: mux rows 0, 9, ..., 99, 108 (LT02/LT13 at rows 0/108, LT00/LT10/LT20/LT30 at the
+        # inner rows), 12 strips. tap_start measured with `gowin_unpack --lw` over 83 vendor bitstreams
+        # (impl/fuzz/lw_report.json in sbp-computational). Gate wires from the chipdb mux sources.
+        'GW5AST-138C': { 'tap_start': [2, 1, 0, 3],
+                     'rows': [(0, 9)] + [(r + 1, r + 9) for r in range(9, 100, 9)],
+                     'top_wires': [('LT02', 'LT13')] + [('LT00', 'LT10')] * 11,
+                     'bottom_wires': [('LT20', 'LT30')] * 11 + [('LT02', 'LT13')],
+                     'top_gate_wires':    [[('A6', 'A7')] + [('A6', 'B6')] * 11, [('B6', 'B7')] + [None] * 11],
+                     'bottom_gate_wires': [[('A7', 'B7')] * 11 + [('A6', 'A7')], [None] * 11 + [('B6', 'B7')]],
+                     'reserved_wires': {}},
         }
 def create_segments(dev, device):
     if device not in _segment_data:
@@ -4749,8 +4760,7 @@ def get_logic_clock_ins(device, dat: Datfile):
                     if not wnames.clknames[i].startswith('UNK')
                 }]
     elif device in {'GW5AST-138C'}:
-        return [{}, {(160, 108, 91, 125)}] # XXX for now only one gate: BRMDCLK1
-        """
+        # Both halves from the vendor dat (CMuxTopIns/CMuxBotIns, offset 80): 24 gates each.
         return [{
                     (i, dat.gw5aStuff['CMuxTopIns'][i - 80][0] - 1,
                         dat.gw5aStuff['CMuxTopIns'][i - 80][1] - 1,
@@ -4762,7 +4772,6 @@ def get_logic_clock_ins(device, dat: Datfile):
                         dat.gw5aStuff['CMuxBotIns'][i - 80][2])
                     for i in range(wnames.clknumbers['TRBDCLK0'], wnames.clknumbers['TRMDCLK1'] + 1)
                 }]
-        """
     # pre 5a
     return [{
                 (i, dat.cmux_ins[i - 80][0] - 1,

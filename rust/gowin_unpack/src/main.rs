@@ -9,6 +9,7 @@ mod codegen;
 mod emit;
 mod emit_io;
 mod fuzz;
+mod lw;
 mod pll;
 mod tile;
 mod tilebels;
@@ -27,10 +28,11 @@ struct Args {
     noalu: bool,
     chipdb: Option<String>,
     fuzz: bool,
+    lw: bool,
 }
 
 fn parse_args() -> Option<Args> {
-    let mut a = Args { fs: Vec::new(), device: String::new(), out: "unpack.v".into(), cst: None, noalu: false, chipdb: None, fuzz: false };
+    let mut a = Args { fs: Vec::new(), device: String::new(), out: "unpack.v".into(), cst: None, noalu: false, chipdb: None, fuzz: false, lw: false };
     let mut it = std::env::args().skip(1);
     while let Some(x) = it.next() {
         match x.as_str() {
@@ -40,11 +42,12 @@ fn parse_args() -> Option<Args> {
             "--chipdb" => a.chipdb = Some(it.next()?),
             "--noalu" => a.noalu = true,
             "--fuzz" => a.fuzz = true,
+            "--lw" => a.lw = true,
             _ => a.fs.push(x),
         }
     }
     if a.fs.is_empty() || a.device.is_empty() {
-        eprintln!("usage: gowin_unpack -d <device> [-o out.v] [-s out.cst] [--noalu] [--fuzz] [--chipdb path] <bitstream.fs ...>");
+        eprintln!("usage: gowin_unpack -d <device> [-o out.v] [-s out.cst] [--noalu] [--fuzz] [--lw] [--chipdb path] <bitstream.fs ...>");
         return None;
     }
     Some(a)
@@ -141,6 +144,12 @@ fn run(a: &Args) -> Option<()> {
     let db = chipdb::load_chipdb(&chipdb_path(a))?;
     let ids = attrs::AttrIds::load()?;
     let t1 = Instant::now();
+    if a.lw {
+        let out_json = if a.out == "unpack.v" { "lw_report.json" } else { &a.out };
+        lw::run_lw(&db, &a.fs, out_json)?;
+        eprintln!("[gowin_unpack --lw] load {:.2}s scan {:.2}s", (t1 - t0).as_secs_f64(), t1.elapsed().as_secs_f64());
+        return Some(());
+    }
     if a.fuzz {
         let out_json = if a.out == "unpack.v" { "fuzz_report.json" } else { &a.out };
         fuzz::run_fuzz(&db, &ids, &a.fs, out_json)?;

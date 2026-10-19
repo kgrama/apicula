@@ -106,7 +106,7 @@ fn flags(tile: &TileBits, name: &str, bel: &Bel, bels: &mut Bels) {
     }
 }
 
-fn pips(tile: &TileBits, table: &PipTable, default: bool, out: &mut Pips) {
+pub(crate) fn pips(tile: &TileBits, table: &PipTable, default: bool, out: &mut Pips) {
     for (dest, srcs) in table {
         let all: Vec<Coord> = srcs.values().flatten().copied().collect();
         let used = on_bits(tile, &all);

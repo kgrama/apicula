@@ -21,8 +21,8 @@ use std::collections::{BTreeMap, BTreeSet, HashSet};
 
 pub const PLL_SITES: &[(&str, usize, usize, usize, i32)] = &[
     ("PLL_L0", 27, 1, 3, 20),
-    ("PLL_L1", 45, 1, 3, 20),
-    ("PLL_L2", 63, 1, 3, 20),
+    ("PLL_L1", 45, 0, 3, 20),
+    ("PLL_L2", 63, 0, 3, 20),
     ("PLL_L3", 81, 1, 3, 20),
     ("PLL_R0", 27, 177, 3, 20),
     ("PLL_R1", 45, 178, 3, 20),
