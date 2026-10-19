@@ -519,6 +519,291 @@ for i in range(4):
 
 hclknumbers_5a25a = {v: k for k, v in hclknames_5a25a.items()}
 
+
+""" *********************************************************************************
+     Names and encoding of wires of the 5AT-60B series chips
+    *********************************************************************************
+"""
+wirenames_60b = { 0: "A0", 1: "B0", 2: "C0", 3: "D0", 4: "A1", 5: "B1", 6: "C1", 7: "D1", 8: "A2", 9: "B2", 10: "C2", 11: "D2", 12: "A3", 13: "B3", 14: "C3",
+15: "D3", 16: "A4", 17: "B4", 18: "C4", 19: "D4", 20: "A5", 21: "B5", 22: "C5", 23: "D5", 24: "A6", 25: "B6", 26: "C6", 27: "D6", 28: "A7", 29: "B7",
+30: "C7", 31: "D7", 32: "F0", 33: "F1", 34: "F2", 35: "F3", 36: "F4", 37: "F5", 38: "F6", 39: "F7", 40: "Q0", 41: "Q1", 42: "Q2", 43: "Q3", 44: "Q4",
+45: "Q5", 46: "Q6", 47: "Q7", 48: "OF0", 49: "OF1", 50: "OF2", 51: "OF3", 52: "OF4", 53: "OF5", 54: "OF6", 55: "OF7", 56: "X01", 57: "X02", 58: "X03",
+59: "X04", 60: "X05", 61: "X06", 62: "X07", 63: "X08", 64: "N100", 65: "SN10", 66: "SN20", 67: "N130", 68: "S100", 69: "S130", 70: "E100", 71: "EW10",
+72: "EW20", 73: "E130", 74: "W100", 75: "W130", 76: "N200", 77: "N210", 78: "N220", 79: "N230", 80: "N240", 81: "N250", 82: "N260", 83: "N270", 84: "S200",
+85: "S210", 86: "S220", 87: "S230", 88: "S240", 89: "S250", 90: "S260", 91: "S270", 92: "E200", 93: "E210", 94: "E220", 95: "E230", 96: "E240", 97: "E250",
+98: "E260", 99: "E270", 100: "W200", 101: "W210", 102: "W220", 103: "W230", 104: "W240", 105: "W250", 106: "W260", 107: "W270", 108: "N800", 109: "N810",
+110: "N820", 111: "N830", 112: "S800", 113: "S810", 114: "S820", 115: "S830", 116: "E800", 117: "E810", 118: "E820", 119: "E830", 120: "W800", 121: "W810",
+122: "W820", 123: "W830", 124: "CLK0", 125: "CLK1", 126: "CLK2", 127: "LSR0", 128: "LSR1", 129: "LSR2", 130: "CE0", 131: "CE1", 132: "CE2", 133: "SEL0",
+134: "SEL1", 135: "SEL2", 136: "SEL3", 137: "SEL4", 138: "SEL5", 139: "SEL6", 140: "SEL7", 141: "N101", 142: "N131", 143: "S101", 144: "S131", 145: "E101", 146: "E131",
+147: "W101", 148: "W131", 149: "N201", 150: "N211", 151: "N221", 152: "N231", 153: "N241", 154: "N251", 155: "N261", 156: "N271", 157: "S201", 158: "S211",
+159: "S221", 160: "S231", 161: "S241", 162: "S251", 163: "S261", 164: "S271", 165: "E201", 166: "E211", 167: "E221", 168: "E231", 169: "E241", 170: "E251",
+171: "E261", 172: "E271", 173: "W201", 174: "W211", 175: "W221", 176: "W231", 177: "W241", 178: "W251", 179: "W261", 180: "W271", 181: "N202", 182: "N212",
+183: "N222", 184: "N232", 185: "N242", 186: "N252", 187: "N262", 188: "N272", 189: "S202", 190: "S212", 191: "S222", 192: "S232", 193: "S242", 194: "S252",
+195: "S262", 196: "S272", 197: "E202", 198: "E212", 199: "E222", 200: "E232", 201: "E242", 202: "E252", 203: "E262", 204: "E272", 205: "W202", 206: "W212",
+207: "W222", 208: "W232", 209: "W242", 210: "W252", 211: "W262", 212: "W272", 213: "N804", 214: "N814", 215: "N824", 216: "N834", 217: "S804", 218: "S814",
+219: "S824", 220: "S834", 221: "E804", 222: "E814", 223: "E824", 224: "E834", 225: "W804", 226: "W814", 227: "W824", 228: "W834", 229: "N808", 230: "N818",
+231: "N828", 232: "N838", 233: "S808", 234: "S818", 235: "S828", 236: "S838", 237: "E808", 238: "E818", 239: "E828", 240: "E838", 241: "W808", 242: "W818",
+243: "W828", 244: "W838", 245: "E110", 246: "W110", 247: "E120", 248: "W120", 249: "S110", 250: "N110", 251: "S120", 252: "N120", 253: "E111", 254: "W111",
+255: "E121", 256: "W121", 257: "S111", 258: "N111", 259: "S121", 260: "N121", 261: "LB01", 262: "LB11", 263: "LB21", 264: "LB31", 265: "LB41", 266: "LB51",
+267: "LB61", 268: "LB71", 269: "GB00", 270: "GB10", 271: "GB20", 272: "GB30", 273: "GB40", 274: "GB50", 275: "GB60", 276: "GB70", 277: "VCC", 278: "VSS",
+279: "LT00", 280: "LT10", 281: "LT20", 282: "LT30", 283: "LT02", 284: "LT13", 285: "LT01", 286: "LT04", 287: "LBO0", 288: "LBO1", 289: "SS00", 290: "SS40",
+291: "GT00", 292: "GT10", 293: "GBO0", 294: "GBO1", 295: "DI0", 296: "DI1", 297: "DI2", 298: "DI3", 299: "DI4", 300: "DI5", 301: "DI6", 302: "DI7",
+303: "CIN0", 304: "CIN1", 305: "CIN2", 306: "CIN3", 307: "CIN4", 308: "CIN5", 309: "COUT0", 310: "COUT1", 311: "COUT2", 312: "COUT3", 313: "COUT4",
+314: "COUT5", 315: "SPCLK_0", 316: "SPCLK_1", 317: "LEAP_GT00", 318: "LEAP_GT10"}
+
+wirenames_60b.update({n: f"UNK{n}" for n in range(506, 769)})
+
+wirenames_60b.update({n: f"LWSPINETL{n - 1001}" for n in range(1001, 1009)})
+wirenames_60b.update({n: f"LWSPINETR{n - 1009}" for n in range(1009, 1017)})
+wirenames_60b.update({n: f"LWSPINEBL{n - 1017}" for n in range(1017, 1025)})
+wirenames_60b.update({n: f"LWSPINEBR{n - 1025}" for n in range(1025, 1033)})
+wirenames_60b.update({n: f"LWSPINEB1L{n - 1033}" for n in range(1033, 1041)})
+wirenames_60b.update({n: f"LWSPINEB1R{n - 1041}" for n in range(1041, 1049)})
+
+wirenames_60b.update({n: f"UNK{n}" for n in range(1049, 1241)})
+
+wirenames_60b.update({n: f"5A{n}" for n in range(545, 553)}) # GW5A-25A need these
+wirenames_60b.update({n: f"5A{n}" for n in range(556, 564)}) # GW5A-25A need these
+
+wirenames_60b.update({n: f"5A{n}" for n in range(1241, 2041)}) # GW5AST-138C need these
+
+wirenumbers_60b = {v: k for k, v in wirenames_60b.items()}
+
+clknames_60b = {}
+clknames_60b.update({n: f"UNK{n}" for n in range(129)})
+clknames_60b.update({n: f"SPINE{n}"      for n in range(8)})
+clknames_60b.update({n: f"SPINE{n - 8}"  for n in range(16, 24)})
+clknames_60b.update({n: f"SPINE{n - 16}" for n in range(32, 40)})
+clknames_60b.update({n: f"SPINE{n - 24}" for n in range(48, 56)})
+
+clknames_60b.update({n: f"PCLK{n - 64}" for n in range(64, 72)})
+clknames_60b.update({n: f"PCLK{n - 128}A" for n in range(128, 134)})
+
+# DQCE
+clknames_60b.update({
+    134: 'PCLK6A',  135: 'PCLK6B',  136: 'PCLK6C',  137: 'PCLK6D',
+    138: 'PCLK7A',  139: 'PCLK7B',  140: 'PCLK7C',  141: 'PCLK7D',
+})
+
+clknames_60b.update({n: f"UNK{n}" for n in range(142, 150)})
+clknames_60b[150] = 'VSS'
+
+clknames_60b.update({n: f"UNK{n}" for n in range(151, 312)})
+
+clknames_60b.update({259: 'OSC_OUT'})
+
+# logic -> clock
+clknames_60b.update({
+    276: 'TRBDCLK0', 277: 'TRBDCLK1', 278: 'TRBDCLK2',
+    287: 'TRMDCLK0', 288: 'TRMDCLK1',
+    289: 'BRBDCLK0', 290: 'BRBDCLK1', 291: 'BRBDCLK2',
+    296: 'BRMDCLK0', 297: 'BRMDCLK1',
+    302: 'BLBDCLK0', 303: 'BLBDCLK1', 304: 'BLBDCLK2',
+    307: 'BLMDCLK0', 308: 'BLMDCLK1',
+    311: 'TLBDCLK0',
+})
+
+#clknames_60b.update({291: "GT00", 292: "GT10"})
+clknames_60b.update({n: f"UNK{n}" for n in range(312, 581)})
+
+
+# That's interesting; the 60k has an additional intermediate wire between the
+# gates and the gate wires.
+# some_cell_CLKx -> postgate_wire -> gate_wire
+clknames_60b.update({
+    565: 'TL_POSTGATE0',
+    566: 'TR_POSTGATE0', 567: 'TR_POSTGATE1', 568: 'TR_POSTGATE2',
+    569: 'BL_POSTGATE0', 570: 'BL_POSTGATE1', 571: 'BL_POSTGATE2',
+    572: 'BR_POSTGATE0', 573: 'BR_POSTGATE1', 574: 'BR_POSTGATE2',
+    579: 'OSC_GATE',
+})
+
+# HCLK->clock network
+# Each HCLK can connect to other HCLKs through two MUXes in the clock system.
+# Here we assign numbers to these MUXes and their inputs - two per HCLK
+clknames_60b.update({
+    1000: 'HCLKMUX0', 1001: 'HCLKMUX1',
+    1002: 'HCLK0_BANK_OUT0', 1003: 'HCLK0_BANK_OUT1',
+    1004: 'HCLK1_BANK_OUT0', 1005: 'HCLK1_BANK_OUT1',
+    1006: 'HCLK2_BANK_OUT0', 1007: 'HCLK2_BANK_OUT1',
+    1008: 'HCLK3_BANK_OUT0', 1009: 'HCLK3_BANK_OUT1',
+})
+
+clknames_60b.update({n: f"LWSPINETL{n - 1001}" for n in range(1001, 1009)})
+clknames_60b.update({n: f"LWSPINETR{n - 1009}" for n in range(1009, 1017)})
+clknames_60b.update({n: f"LWSPINEBL{n - 1017}" for n in range(1017, 1025)})
+clknames_60b.update({n: f"LWSPINEBR{n - 1025}" for n in range(1025, 1033)})
+clknames_60b.update({n: f"LWSPINEB1L{n - 1033}" for n in range(1033, 1041)})
+clknames_60b.update({n: f"LWSPINEB1R{n - 1041}" for n in range(1041, 1049)})
+
+clknames_60b.update({n: f"UNK{n}" for n in range(1049, 1225)})
+
+clknames_60b.update({n: f"UNK{n}" for n in range(1273, 1289)}) # GW5AST-138C need these
+clknames_60b.update({n: f"UNK{n}" for n in range(1353, 1369)}) # GW5AST-138C need these
+clknames_60b.update({n: f"UNK{n}" for n in range(1433, 1449)}) # GW5AST-138C need these
+clknames_60b.update({n: f"UNK{n}" for n in range(1513, 1529)}) # GW5AST-138C need these
+clknames_60b.update({n: f"UNK{n}" for n in range(1593, 1609)}) # GW5AST-138C need these
+clknames_60b.update({n: f"UNK{n}" for n in range(1673, 1689)}) # GW5AST-138C need these
+clknames_60b.update({n: f"UNK{n}" for n in range(1753, 1769)}) # GW5AST-138C need these
+clknames_60b.update({n: f"UNK{n}" for n in range(1833, 1849)}) # GW5AST-138C need these
+clknames_60b.update({n: f"UNK{n}" for n in range(1913, 1929)}) # GW5AST-138C need these
+clknames_60b.update({n: f"UNK{n}" for n in range(1993, 2009)}) # GW5AST-138C need these
+
+clknumbers_60b = {v: k for k, v in clknames_60b.items()}
+
+# hclk
+hclknames_60b = clknames_60b.copy()
+
+hclknames_60b[0] = 'VSS'
+hclknames_60b[1] = 'VCC'
+hclknames_60b[187] = 'VSS'
+hclknames_60b[188] = 'VCC'
+hclknames_60b[374] = 'VSS'
+hclknames_60b[375] = 'VCC'
+hclknames_60b[561] = 'VSS'
+hclknames_60b[562] = 'VCC'
+
+hclknames_60b.update({n: f"HCLK_UNK{n}" for n in range(2, 6 * 187 + 4 * 65)})
+
+# CLKDIV2 inputs
+for i in range(2):
+    hclknames_60b[86 + i]   = f'CLKDIV2_I{1 + i * 2 }{1 + i}'
+
+# CLKDIV2 outputs
+for i in range(4):
+    hclknames_60b[88 + i]   = f'CLKDIV2_O0{i}'
+    hclknames_60b[275 + i]  = f'CLKDIV2_O1{i}'
+    hclknames_60b[462 + i]  = f'CLKDIV2_O2{i}'
+    hclknames_60b[646 + i]  = f'CLKDIV2_O3{i}'
+
+# CLKDIV pins
+for i in range(4):
+    hclknames_60b[143 + i]  = f'CLKDIV_I0{i}'
+    hclknames_60b[330 + i]  = f'CLKDIV_I1{i}'
+    hclknames_60b[517 + i]  = f'CLKDIV_I2{i}'
+    hclknames_60b[704 + i]  = f'CLKDIV_I3{i}'
+    hclknames_60b[104 + i]  = f'CLKDIV_O0{i}'
+    hclknames_60b[291 + i]  = f'CLKDIV_O1{i}'
+    hclknames_60b[478 + i]  = f'CLKDIV_O2{i}'
+    hclknames_60b[665 + i]  = f'CLKDIV_O3{i}'
+
+# from logic to HCLK
+for i in range(4):
+    hclknames_60b[30 + i]   = f'L2HCLK0{i}'
+    hclknames_60b[217 + i]  = f'L2HCLK1{i}'
+    hclknames_60b[404 + i]  = f'L2HCLK2{i}'
+    hclknames_60b[591 + i]  = f'L2HCLK3{i}'
+
+# HCLK for IO logic
+for i in range(4):
+    hclknames_60b[96 + i]  = f'HCLK0{i}'
+    hclknames_60b[283 + i] = f'HCLK1{i}'
+    hclknames_60b[470 + i] = f'HCLK2{i}'
+    hclknames_60b[657 + i] = f'HCLK3{i}'
+
+# HCLK muxes
+for i in range(4):
+    hclknames_60b[92 + i]   = f'HCLK_MUX_ALPHA0{i}'
+    hclknames_60b[279 + i]  = f'HCLK_MUX_ALPHA1{i}'
+    hclknames_60b[466 + i]  = f'HCLK_MUX_ALPHA2{i}'
+    hclknames_60b[653 + i]  = f'HCLK_MUX_ALPHA3{i}'
+
+    hclknames_60b[34 + i]   = f'HCLK_MUX_BETA0{i}'
+    hclknames_60b[221 + i]  = f'HCLK_MUX_BETA1{i}'
+    hclknames_60b[408 + i]  = f'HCLK_MUX_BETA2{i}'
+    hclknames_60b[595 + i]  = f'HCLK_MUX_BETA3{i}'
+
+    hclknames_60b[24 + i]   = f'HCLK_MUX_GAMMA0{i}'
+    hclknames_60b[211 + i]  = f'HCLK_MUX_GAMMA1{i}'
+    hclknames_60b[398 + i]  = f'HCLK_MUX_GAMMA2{i}'
+    hclknames_60b[585 + i]  = f'HCLK_MUX_GAMMA3{i}'
+
+    hclknames_60b[139 + i]  = f'HCLK_MUX_DELTA0{i}'
+    hclknames_60b[326 + i]  = f'HCLK_MUX_DELTA1{i}'
+    hclknames_60b[513 + i]  = f'HCLK_MUX_DELTA2{i}'
+    hclknames_60b[700 + i]  = f'HCLK_MUX_DELTA3{i}'
+
+    hclknames_60b[131 + i]  = f'HCLK_MUX_EPSILON0{i}'
+    hclknames_60b[135 + i]  = f'HCLK_MUX_EPSILON0{i + 4}'
+    hclknames_60b[318 + i]  = f'HCLK_MUX_EPSILON1{i}'
+    hclknames_60b[412 + i]  = f'HCLK_MUX_EPSILON1{i + 4}'
+    hclknames_60b[505 + i]  = f'HCLK_MUX_EPSILON2{i}'
+    hclknames_60b[509 + i]  = f'HCLK_MUX_EPSILON2{i + 4}'
+    hclknames_60b[692 + i]  = f'HCLK_MUX_EPSILON3{i}'
+    hclknames_60b[696 + i]  = f'HCLK_MUX_EPSILON3{i + 4}'
+
+# Hub
+for i in range(2):
+    hclknames_60b[28 + i]  = f'HCLK_HUB0{i}'
+    hclknames_60b[215 + i] = f'HCLK_HUB1{i}'
+    hclknames_60b[402 + i] = f'HCLK_HUB2{i}'
+    hclknames_60b[589 + i] = f'HCLK_HUB3{i}'
+
+# From inter-hclk bridge
+for i in range(4):
+    hclknames_60b[169 + i]  = f'HCLK_FROM_IHCLK0{i}'
+    hclknames_60b[356 + i]  = f'HCLK_FROM_IHCLK1{i}'
+    hclknames_60b[543 + i]  = f'HCLK_FROM_IHCLK2{i}'
+    hclknames_60b[730 + i]  = f'HCLK_FROM_IHCLK3{i}'
+
+# To inter-hclk bridge
+for i in range(4):
+    hclknames_60b[177 + i]  = f'HCLK_TO_IHCLK0{i}'
+    hclknames_60b[364 + i]  = f'HCLK_TO_IHCLK1{i}'
+    hclknames_60b[551 + i]  = f'HCLK_TO_IHCLK2{i}'
+    hclknames_60b[738 + i]  = f'HCLK_TO_IHCLK3{i}'
+
+# HCLK buffers
+for i in range(4):
+    hclknames_60b[76 + 2 * i]  = f'HCLK_BUF_AO0{i}'
+    hclknames_60b[52 + i]      = f'HCLK_BUF_AI0{i}'
+    hclknames_60b[77 + 2 * i]  = f'HCLK_BUF_BO0{i}'
+    hclknames_60b[56 + i]      = f'HCLK_BUF_BI0{i}'
+
+    hclknames_60b[263 + 2 * i] = f'HCLK_BUF_AO1{i}'
+    hclknames_60b[239 + i]     = f'HCLK_BUF_AI1{i}'
+    hclknames_60b[264 + 2 * i] = f'HCLK_BUF_BO1{i}'
+    hclknames_60b[243 + i]     = f'HCLK_BUF_BI1{i}'
+
+    hclknames_60b[450 + 2 * i] = f'HCLK_BUF_AO2{i}'
+    hclknames_60b[426 + i]     = f'HCLK_BUF_AI2{i}'
+    hclknames_60b[451 + 2 * i] = f'HCLK_BUF_BO2{i}'
+    hclknames_60b[430 + i]     = f'HCLK_BUF_BI2{i}'
+
+    hclknames_60b[637 + 2 * i] = f'HCLK_BUF_AO3{i}'
+    hclknames_60b[613 + i]     = f'HCLK_BUF_AI3{i}'
+    hclknames_60b[638 + 2 * i] = f'HCLK_BUF_BO3{i}'
+    hclknames_60b[617 + i]     = f'HCLK_BUF_BI3{i}'
+
+# HCLK GCLK muxes
+for i in range(4):
+    hclknames_60b[165 + i]  = f'HCLK_GCLK_MUX0{i}'
+    hclknames_60b[352 + i]  = f'HCLK_GCLK_MUX1{i}'
+    hclknames_60b[539 + i]  = f'HCLK_GCLK_MUX2{i}'
+    hclknames_60b[726 + i]  = f'HCLK_GCLK_MUX3{i}'
+
+
+# GCLK pins
+hclknames_60b.update({n: f"HCLK_GCLK0{i}" for i, n in enumerate(range(123, 131))})
+hclknames_60b.update({n: f"HCLK_GCLK1{i}" for i, n in enumerate(range(310, 318))})
+hclknames_60b.update({n: f"HCLK_GCLK2{i}" for i, n in enumerate(range(497, 505))})
+hclknames_60b.update({n: f"HCLK_GCLK3{i}" for i, n in enumerate(range(684, 692))})
+
+# Inter-hclk bridge
+for i in range(4):
+    hclknames_60b[1130 + i * 65]   = f'HCLK_IHCLK_MUX{i}0'
+    hclknames_60b[1131 + i * 65]   = f'HCLK_IHCLK_MUX{i}1'
+    hclknames_60b[1155 + i * 65]   = f'HCLK_IHCLK_IN{i}0'
+    hclknames_60b[1156 + i * 65]   = f'HCLK_IHCLK_IN{i}1'
+    hclknames_60b[1157 + i * 65]   = f'HCLK_IHCLK_IN{i}2'
+    hclknames_60b[1158 + i * 65]   = f'HCLK_IHCLK_IN{i}3'
+    hclknames_60b[1163 + i * 65]   = f'HCLK_IHCLK_OUT{i}0'
+    hclknames_60b[1164 + i * 65]   = f'HCLK_IHCLK_OUT{i}1'
+    hclknames_60b[1165 + i * 65]   = f'HCLK_IHCLK_OUT{i}2'
+    hclknames_60b[1166 + i * 65]   = f'HCLK_IHCLK_OUT{i}3'
+
+hclknumbers_60b = {v: k for k, v in hclknames_60b.items()}
+
 """ *********************************************************************************
      Names and encoding of wires of the 5AST138C series chips
     *********************************************************************************
@@ -739,6 +1024,13 @@ def select_wires(device):
         clknumbers  = clknumbers_5a25a
         hclknames   = hclknames_5a25a
         hclknumbers = hclknumbers_5a25a
+    elif device in {'GW5AT-60B'}:
+        wirenames   = wirenames_60b
+        wirenumbers = wirenumbers_60b
+        clknames    = clknames_60b
+        clknumbers  = clknumbers_60b
+        hclknames   = hclknames_60b
+        hclknumbers = hclknumbers_60b
     elif device in {'GW5AST-138C'}:
         wirenames   = wirenames_5ast138c
         wirenumbers = wirenumbers_5ast138c

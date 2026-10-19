@@ -42,7 +42,7 @@ class Datfile:
             # for these files is 538638 B vs 505000 B for partType 0) which we do not
             # parse yet — base grid/IO/logic parse identically. See docs/02.
             self.compat_dict.update(self.read_something())
-        elif partType == 2:  # 5 Series
+        elif partType == 2 or partType == 10:  # 5 Series
             self.gw5aStuff = self.read_5Astuff()
             self.compat_dict.update(self.read_something())
             self.compat_dict.update(self.read_something5A())
@@ -177,6 +177,7 @@ class Datfile:
         rows = []
         grid_mapping = {
             (0, 0): " ",  # empty
+            (0, 1): "u",  # unknown
             (1, 0): "1",  # unknown
             (1, 1): "I",  # I/O
             (2, 1): "L",  # LVDS (GW2A* only)
@@ -202,10 +203,10 @@ class Datfile:
                 idx = y * 200 + x
                 a = self.read_u32_at(5744 + 4 * idx)
                 b = self.read_u8_at(125744 + idx)
+                if (a,b) not in grid_mapping.keys():
+                    print(f"no grid_mapping key for coords {y, x}: ", a, b)
                 c = grid_mapping[a, b]
 
-                if (a,b) not in grid_mapping.keys():
-                    print("no grid_mapping key for coords: ", a, b)
                 #if x == cc_x and y == cc_y:
                 #    assert c == "b"
 
@@ -361,8 +362,8 @@ class Datfile:
         ret["Ae350SocOuts"]         = self.read_scaledGrid16(0x206, 3, 3, RSTable5ATOffset + 0x8bb0, 10)
 
 
-        ret["CMuxTopInNodes"]       = self.read_scaledGrid16(0xbd, 0x54, 0x54 * 2, 1, RSTable5ATOffset + 0x14af4)
-        ret["CMuxBotInNodes"]       = self.read_scaledGrid16(0xbd, 0x54, 0x54 * 2, 1, RSTable5ATOffset + 0x1c6fc)
+        ret["CMuxTopInNodes"]       = self.read_scaledGrid16i(0xbd, 0x54, 0x54 * 2, 1, RSTable5ATOffset + 0x14af4)
+        ret["CMuxBotInNodes"]       = self.read_scaledGrid16i(0xbd, 0x54, 0x54 * 2, 1, RSTable5ATOffset + 0x1c6fc)
         ret["CMuxTopIns"]           = self.read_scaledGrid16i(0xbd, 3, 6, 1, RSTable5ATOffset + 0x24304)
         ret["CMuxBotIns"]           = self.read_scaledGrid16i(0xbd, 3, 6, 1, RSTable5ATOffset + 0x24772)
 
