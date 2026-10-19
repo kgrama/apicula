@@ -266,6 +266,10 @@ iob_attrvals = {
             'LVCMOS33OD12':     161,
             'LVCMOS25OD12':     162,
             'LVCMOS18OD12':     163,
+            # GW5AST-138C: the vendor IDE encodes SSTL15 as code 158 (named SSTL135 above) and
+            # SSTL15D as 165; measured on sbp-computational impl/fuzz (tools/fuzz_iotype_map.py).
+            'SSTL15_5A':        158,
+            'SSTL15D_5A':       165,
             # pull strength
             'MEDIUM':           186,
             'WEAK':             187,
@@ -1192,6 +1196,13 @@ dlldly_attrids = {
         'ADJ5':            10,
         'ADJ6':            11,
         'ADJ7':            12,
+        # GW5AST-138C DDRDLL (shortval 'DLL0' at (108,0)); attribute ids unnamed in the vendor
+        # tables, values measured constant over 19 vendor bitstreams.
+        'DLL_UNK14':       14,
+        'DLL_UNK20':       20,
+        'DLL_UNK22':       22,
+        'DLL_UNK23':       23,
+        'DLL_UNK27':       27,
     }
 
 dlldly_attrvals = {
@@ -1430,6 +1441,7 @@ pll_attrids = {
         'A_SSC_EN':               207,
         'A_CLKIN_SEL':            208,
         'A_CLKFB_SEL':            209,
+        'PLL_UNK211':             211, # GW5AST-138C: the vendor IDE sets it to 2 on every static PLL
         'A_GMC_SEL':              212,
         'A_VR_EN':                213,
     }
@@ -1851,6 +1863,8 @@ iologic_attrvals = {
         'CE':                  91,
         'HCLK1_':              93,
         'UNK102':             102,
+        # GW5AST-138C (impl/fuzz): INMODE of the IDES16 half of an OSER16/IDES16 pair
+        'UNK105':             105,
         'TRUE':               107,
         'HCLK2_':             114,
         'HCLK3_':             115,

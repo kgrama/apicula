@@ -3108,7 +3108,7 @@ def fse_create_lr_plls(dev, device, fse, dat):
 def _fse_create_one_lr_pll(dev, dat, row, col, side, pll_idx, base_bits, div_cols):
     """Build ONE L/R PLL bel at (row, col). Reuses the bottom-PLL extra_func['bpll']
     schema so gowin_pack.set_bpll_attrs handles it unchanged; only the geometry (3 tiles,
-    config row 20) and spine group ({side}PLL{pll_idx}) differ. Fixed config (IDIV1/FBDIV1/MDIV18).
+    config row 20) and spine group ({side}PLL{pll_idx}) differ.
 
     All node names carry an X{col}Y{row}/ coordinate prefix so the 8 L/R sites never collide,
     and the spine node is {side}PLL{pll_idx}CLK<n> (parameterized, not the old hardcoded PLL0)."""
@@ -3116,14 +3116,24 @@ def _fse_create_one_lr_pll(dev, dat, row, col, side, pll_idx, base_bits, div_col
     bpll = extra.setdefault('bpll', {})
     # 3-tile horizontal group (head + 2 companions), unlike the bottom edge's 4.
     bpll['tiles'] = [(row, col), (row, col + 1), (row, col + 2)]
+    lr_div_table = {f'{i},{f},{m}': sorted(v) for (i, f, m), v in _BPLL_DIV_TABLE.items()}
+    lr_div_table['1,1,18'] = sorted(div_cols)
+    lr_div_table['1,1,16_vco800'] = [13, 14, 15, 23, 24, 25, 33, 40, 60, 84]
+    # Strip hardcoded ODIV0=20 ((0,20,90..96)) and CLKOUT0_EN ((1,20,60)) from base_bits
+    # so set_bpll_attrs encodes ODIV0..6 and CLKOUT0..6_EN dynamically.
+    clean_base = [
+        list(t) for t in base_bits
+        if not (t[0] == 0 and t[1] == 20 and 90 <= t[2] <= 96)
+        and not (t[0] == 1 and t[1] == 20 and t[2] == 60)
+    ]
     bpll['bit_table'] = {
         'row': 20,                       # L/R divider register row (bottom uses 21)
-        'div_cols': sorted(div_cols),
-        'div_table': {'1,1,18': sorted(div_cols)},   # measured fixed config (45MHz)
-        'base_bits': [list(t) for t in base_bits],
-        'clkin_path': [],                # CLKIN delivery TODO (pad-fed lock is future work)
-        'odiv_therm': {},                # ODIV has no extra fuse in single-output config
-        'clkout_en_col': {},
+        'div_cols': list(_BPLL_DIV_COLS),
+        'div_table': lr_div_table,
+        'base_bits': clean_base,
+        'clkin_path': [],
+        'odiv_therm': {str(k): list(v) for k, v in _BPLL_ODIV_THERM.items()},
+        'clkout_en_col': {str(k): list(v) for k, v in _BPLL_CLKOUT_EN_COL.items()},
     }
 
     wt = wnames.wirenames
