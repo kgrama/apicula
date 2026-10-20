@@ -7489,16 +7489,32 @@ class GW5AST_138C(GW5A):
     #==============================
     #========== Iologic (measured on vendor DDR3 PHY and USB2 soft-PHY bitstreams, impl/fuzz)
     #==============================
-    # FCLKSEL pattern the vendor writes for an HCLK0-fed IOLOGIC; n>0 by analogy, unmeasured.
+    # FCLKSEL values by HCLK slot k (the HCLK_MUX_ALPHA<block><k> serving the pad = bel.fclk SPINE10+k),
+    # measured with gw_sh over all 6 HCLK blocks (impl/fuzz/fclksel/fclksel_table.tsv, A pads decoded).
+    _FCLKSEL_OUT = {
+        0: (('FCLKSEL0', 'HCLK0'), ('FCLKSEL1', 'HCLK2'), ('FCLKSEL2', 'HCLK2_'), ('FCLKSEL3', 'HCLK0_')),
+        1: (('FCLKSEL0', 'HCLK3'), ('FCLKSEL4', 'HCLK1_')),
+        2: (('FCLKSEL1', 'HCLK2'), ('FCLKSEL2', 'HCLK2_')),
+        3: (('FCLKSEL0', 'HCLK3'),),
+    }
+    _FCLKSEL_IN = {
+        0: (('FCLKSEL3', 'HCLK0_'), ('FCLKSEL5', 'HCLK0')),
+        1: (('FCLKSEL4', 'HCLK1_'), ('FCLKSEL5', 'HCLK3'), ('FCLKSEL6', 'HCLK3'), ('FCLKSEL7', 'HCLK3_')),
+        2: (),
+        3: (('FCLKSEL5', 'HCLK3'), ('FCLKSEL6', 'HCLK3'), ('FCLKSEL7', 'HCLK3_')),
+    }
+
     def iologic_fclksel(self, bel: IologicBelDesc, out: bool) -> list[AttrVal]:
         if bel.fclk not in {'SPINE10', 'SPINE11', 'SPINE12', 'SPINE13'}:
             return []
-        n = int(bel.fclk[-1])
-        m = (n + 2) % 4
-        if out:
-            return [AttrVal('FCLKSEL0', f'HCLK{n}'), AttrVal('FCLKSEL1', f'HCLK{m}'),
-                    AttrVal('FCLKSEL2', f'HCLK{m}_'), AttrVal('FCLKSEL3', f'HCLK{n}_')]
-        return [AttrVal('FCLKSEL3', f'HCLK{n}_'), AttrVal('FCLKSEL5', f'HCLK{n}')]
+        table = self._FCLKSEL_OUT if out else self._FCLKSEL_IN
+        return [AttrVal(a, v) for a, v in table[int(bel.fclk[-1])]]
+
+    def iologic_paired_in_fclksel(self, bel: IologicBelDesc) -> list[AttrVal]:
+        """ Input FCLKSELs for an IDES paired with this output cell, minus those the output list sets. """
+        k = int(bel.fclk[-1]) if bel.fclk in {'SPINE10', 'SPINE11', 'SPINE12', 'SPINE13'} else 0
+        have = {a for a, _ in self._FCLKSEL_OUT[k]} if bel.fclk in {'SPINE10', 'SPINE11', 'SPINE12', 'SPINE13'} else set()
+        return [AttrVal(a, v) for a, v in self._FCLKSEL_IN[k] if a not in have]
 
     def get_out_iologic_attrs(self, bel: IologicBelDesc) -> list[AttrVal]:
         cell_parms = bel.cell.parms
@@ -7509,13 +7525,13 @@ class GW5AST_138C(GW5A):
             av.append(AttrVal('WRFCLKSEL', str(cell_parms.get('TCLK_SOURCE', 'UNK102')).strip('"')))
             if bel.main_cell_inmode in {'MIDDRX1', 'MIDDRX2', 'MIDDRX4'}:   # paired with IDES8_MEM (DQ pins)
                 av += [AttrVal('INMODE', bel.main_cell_inmode), AttrVal('CLKIMUX', 'ENABLE'), AttrVal('FIFO', 'ENABLE'),
-                       AttrVal('IOLOGIC_UNKNOWN118', 1005), AttrVal('UD2', 118), AttrVal('FCLKSEL5', 'HCLK0')]
+                       AttrVal('IOLOGIC_UNKNOWN118', 1005), AttrVal('UD2', 118)] + self.iologic_paired_in_fclksel(bel)
             else:
                 av.append(AttrVal('LSRIMUX_0', '0'))
         elif outmode == 'ODDRX8':                                  # OSER16 main cell
             av += [AttrVal('OUTMODE', 'ODDRX8'), AttrVal('HWL', 'TRUE'), AttrVal('WRFCLKSEL', 'UNK102')]
             if bel.main_cell_inmode == 'IDDRX8':                   # paired with IDES16
-                av += [AttrVal('INMODE', 'UNK105'), AttrVal('CLKIMUX', 'ENABLE'), AttrVal('FCLKSEL5', 'HCLK0')]
+                av += [AttrVal('INMODE', 'UNK105'), AttrVal('CLKIMUX', 'ENABLE')] + self.iologic_paired_in_fclksel(bel)
         elif outmode == 'DDRENABLE16':                             # OSER16 aux cell
             av += [AttrVal('OUTMODE', 'LVDSOUT'), AttrVal('ISI', 'ENABLE'), AttrVal('OCLKCE', 'CE'),
                    AttrVal('LSRIMUX_0', '0'), AttrVal('WRFCLKSEL', 'UNK102')]
@@ -7582,6 +7598,12 @@ class GW5AST_138C(GW5A):
                 return [CellFuseBits(cx, cy, bits)] if bits else []
         return []
 
+    def get_IOLOGICI_EMPTY_fuses(self, bel: BelDesc) -> list[CellFuseBits]:
+        return super().get_IOLOGICI_EMPTY_fuses(bel) + self.get_merged_iodelay_fuses(self.make_IologicBelDesc(bel))
+
+    def get_IOLOGICO_EMPTY_fuses(self, bel: BelDesc) -> list[CellFuseBits]:
+        return super().get_IOLOGICO_EMPTY_fuses(bel) + self.get_merged_iodelay_fuses(self.make_IologicBelDesc(bel))
+
     def common_in_iologic_handler(self, bel: IologicBelDesc) -> list[CellFuseBits]:
         return super().common_in_iologic_handler(bel) + self.get_merged_iodelay_fuses(self.make_IologicBelDesc(bel))
 
@@ -7598,12 +7620,6 @@ class GW5AST_138C(GW5A):
     #==============================
     #========== Transplant
     #==============================
-    def get_IOLOGICI_EMPTY_fuses(self, bel: BelDesc) -> list[CellFuseBits]:
-        return super().get_IOLOGICI_EMPTY_fuses(bel) + self.get_merged_iodelay_fuses(self.make_IologicBelDesc(bel))
-
-    def get_IOLOGICO_EMPTY_fuses(self, bel: BelDesc) -> list[CellFuseBits]:
-        return super().get_IOLOGICO_EMPTY_fuses(bel) + self.get_merged_iodelay_fuses(self.make_IologicBelDesc(bel))
-
     def get_transplant_fuses(self) -> list[CellFuseBits]:
         """ Raw vendor tile bits (--transplant) for blocks without attribute tables (DQS, DDR IOLOGIC routing). """
         fuses = []
