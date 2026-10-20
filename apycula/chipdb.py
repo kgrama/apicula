@@ -3937,6 +3937,16 @@ def fse_create_5a138_clocks(dev, device, dat: Datfile, fse):
     center_row = dat.grid.center_y
     row_range = [range(center_row), range(center_row, dev.rows)]
 
+    # Measured (impl/fuzz/pll_spine_observed.json, vendor builds): B[LR]PLL0CLK0..3 only ever
+    # reach SPINE16..21 (one single-sample exception BLPLL0CLK2->SPINE8 ignored).  The fse offers
+    # SPINE8..13 too, but routing there broke USB CDC on hardware, so drop those bottom-PLL pips.
+    for r in range(dev.rows):
+        for c in range(dev.cols):
+            for dest, srcs in dev[r, c].clock_pips.items():
+                if dest.startswith('SPINE') and 8 <= int(dest[5:]) <= 13:
+                    for src in [w for w in srcs if w.startswith(('BLPLL', 'BRPLL'))]:
+                        del srcs[src]
+
     # create each half of the clock wires
     for half in range(2):
         clk_desc = get_clock_ins(device, dat)[half]
