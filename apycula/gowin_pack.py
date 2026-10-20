@@ -7572,7 +7572,9 @@ class GW5AST_138C(GW5A):
             return []
         x, y = bel.x, bel.y
         off = self.chipdb.get_iob_fuse_cell_offset(x, y, bel.idx_str)
-        for cx, cy in ((x, y), (x + off[1], y + off[0]) if off else (x, y)):
+        # B pads keep their bits in the offset tile; the own tile then belongs to the A pad.
+        cands = ((x + off[1], y + off[0]), (x, y)) if off else ((x, y),)
+        for cx, cy in cands:
             if 'IODELAY' in self.chipdb.db.extra_func.get((cy, cx), {}).get('fuzzed_attrs', {}):
                 dly = CellDesc(bel.cell.name, 'IODELAY', {'C_STATIC_DLY': bel.cell.parms['C_STATIC_DLY']},
                                bel.cell.attrs, bel.cell.connections)
@@ -7596,6 +7598,12 @@ class GW5AST_138C(GW5A):
     #==============================
     #========== Transplant
     #==============================
+    def get_IOLOGICI_EMPTY_fuses(self, bel: BelDesc) -> list[CellFuseBits]:
+        return super().get_IOLOGICI_EMPTY_fuses(bel) + self.get_merged_iodelay_fuses(self.make_IologicBelDesc(bel))
+
+    def get_IOLOGICO_EMPTY_fuses(self, bel: BelDesc) -> list[CellFuseBits]:
+        return super().get_IOLOGICO_EMPTY_fuses(bel) + self.get_merged_iodelay_fuses(self.make_IologicBelDesc(bel))
+
     def get_transplant_fuses(self) -> list[CellFuseBits]:
         """ Raw vendor tile bits (--transplant) for blocks without attribute tables (DQS, DDR IOLOGIC routing). """
         fuses = []

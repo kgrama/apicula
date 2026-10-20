@@ -5609,9 +5609,29 @@ _GW5AST_FUZZED_CELLS = {
     # Only one DHCE bel is created (every known consumer instantiates exactly one).
     'DHCE': {'io_tile': (108, 165), 'cfg_tile': (108, 165)},
 }
+# IODELAY C_STATIC_DLY (8 bits, LSB first) on left/right IO pads of GW5AST-138C, vendor-measured
+# (impl/fuzz/iodelay/iodelay_bits.json, one-hot values 1..128 per pad type, identical across rows).
+# The A pad's bits live in its own tile (ttyp 243 left / 245 right); the B pad's bits live in the
+# tile one row below (ttyp 244 left / 246 right).  Bottom pads are NOT covered here: the measured
+# bottom positions (row 21) disagree with the older 247-site table above, see the commit message.
+_GW5AST_LR_IODELAY_BITS = {
+    243: [(3, 6), (3, 3), (3, 1), (3, 10), (3, 12), (3, 13), (3, 14), (4, 14)],
+    244: [(11, 3), (11, 5), (10, 7), (10, 9), (10, 0), (9, 4), (9, 8), (9, 9)],
+    245: [(3, 129), (3, 132), (3, 134), (3, 125), (3, 123), (3, 122), (3, 121), (4, 121)],
+    246: [(11, 132), (11, 130), (10, 128), (10, 126), (10, 135), (9, 131), (9, 127), (9, 126)],
+}
+def fse_create_gw5ast_lr_iodelay(dev):
+    for r in range(dev.rows):
+        for c in range(dev.cols):
+            bits = _GW5AST_LR_IODELAY_BITS.get(dev.grid[r][c])
+            if bits:
+                fa = dev.extra_func.setdefault((r, c), {}).setdefault('fuzzed_attrs', {})
+                fa['IODELAY'] = {'C_STATIC_DLY': [list(b) for b in bits]}
+
 def fse_create_gw5ast_fuzzed_cells(dev, device):
     if device != 'GW5AST-138C':
         return
+    fse_create_gw5ast_lr_iodelay(dev)
     for cell, info in _GW5AST_FUZZED_CELLS.items():
         io_row, io_col = info['io_tile']
         # For multi-site cells (sites_ttyp set), the io_tile anchor must itself be a member of
