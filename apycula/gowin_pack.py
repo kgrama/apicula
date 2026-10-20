@@ -7641,11 +7641,12 @@ class GW5AST_138C(GW5A):
     #==============================
     #========== Fuzzed hard cells (DQS, DDRDLL, IODELAY): param -> bits from chipdb extra_func['fuzzed_attrs']
     #==============================
-    def get_fuzzed_attr_fuses(self, bel: BelDesc) -> set[Coord]:
+    def get_fuzzed_attr_fuses(self, bel: BelDesc, site: Coord | None = None) -> set[Coord]:
         """ Bits for the cell parameters that differ from the vendor default. The chipdb stores
         'ATTR=VAL' -> bits for single-valued params and 'ATTR' -> per-bit list for bit vectors
-        (C_STATIC_DLY, LSB first). Defaults have no entry and set no bits. """
-        ef = self.chipdb.db.extra_func.get((bel.y, bel.x), {})
+        (C_STATIC_DLY, LSB first). Defaults have no entry and set no bits. 'site' overrides the
+        (row, col) tile holding the table (default: the bel's own tile). """
+        ef = self.chipdb.db.extra_func.get(site or (bel.y, bel.x), {})
         table = ef.get('fuzzed_attrs', {}).get(bel.cell.typ)
         if table is None:
             raise Exception(f"X{bel.x}Y{bel.y} has no fuzzed {bel.cell.typ} site; {bel.cell.name} cannot be placed here")
@@ -7672,8 +7673,8 @@ class GW5AST_138C(GW5A):
         return [CellFuseBits(bel.x, bel.y, bits)] if bits else []
 
     def get_DDRDLL_fuses(self, bel: BelDesc) -> list[CellFuseBits]:
-        """ DDRDLL at (108,0): fixed vendor attribute set through the shortval['DLL0'] table, plus the
-        fuzzed bits for non-default DIV_SEL/SCAL_EN/DLL_FORCE. """
+        """ DDRDLL bel at (108,0): vendor attribute set via shortval['DLL0'] of that tile; the fuzzed
+        DIV_SEL/SCAL_EN/DLL_FORCE bits sit in the cfg tile (0,0). """
         li = self.chipdb.db.logicinfo['DLLDLY']
         av = set()
         for attr, val in self.ddrdll_attrs:
@@ -7683,10 +7684,14 @@ class GW5AST_138C(GW5A):
         ttyp = self.chipdb.get_ttyp(bel.x, bel.y)
         if 'DLL0' not in self.chipdb.db.shortval.get(ttyp, {}):
             raise Exception(f"X{bel.x}Y{bel.y} has no DLL0 table; DDRDLL {bel.cell.name} cannot be placed here")
+        fuses = []
         bits = get_shortval_fuses(self.chipdb.db, ttyp, av, 'DLL0')
-        if 'fuzzed_attrs' in self.chipdb.db.extra_func.get((bel.y, bel.x), {}):
-            bits |= self.get_fuzzed_attr_fuses(bel)
-        return [CellFuseBits(bel.x, bel.y, bits)] if bits else []
+        if bits:
+            fuses.append(CellFuseBits(bel.x, bel.y, bits))
+        cfg_bits = self.get_fuzzed_attr_fuses(bel, (0, 0))
+        if cfg_bits:
+            fuses.append(CellFuseBits(0, 0, cfg_bits))
+        return fuses
 
     def get_PLL_fuses(self, bel: BelDesc) -> list[CellFuseBits]:
         """ The 138C PLL config lives in the shortval['PLL'] tables of the head tile and

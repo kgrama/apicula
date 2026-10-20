@@ -505,11 +505,14 @@ def fse_clock_pips_138(fse, ttyp, device):
             # XXX skip 6 and 7 for now
             if srcid in range(wnames.clknumbers['P16A'], wnames.clknumbers['P47D'] + 1):
                 continue
-            # XXX skip longwires
-            if srcid in range(164, 237):
+            # HCLK->bridge clock inputs (measured: ddr_pico tiles_all.json, gw_sh
+            # CLKDIV_4_LEFTSIDE_{1,2,3} bits at (54,93)) live in table 38 too
+            hclk_brg = ttyp in bridge_tile_types_138 and srcid in _gw5ast_hclk_bridge_srcids
+            # XXX skip longwires (except HCLK->bridge clock inputs in bridge cells)
+            if srcid in range(164, 237) and not hclk_brg:
                 continue
-            # XXX ignore unknown wires
-            if srcid in range(105, 129):
+            # XXX ignore unknown wires (except HCLK->bridge clock inputs in bridge cells)
+            if srcid in range(105, 129) and not hclk_brg:
                 continue
             if srcid in range(253, 269):
                 continue
@@ -517,6 +520,11 @@ def fse_clock_pips_138(fse, ttyp, device):
             # 277 as source is VCC
             if srcid == 277:
                 src = 'VCC'
+            if hclk_brg and dest.startswith('SPINE'):
+                # bridge spines take the TOP and BOT copies of the HCLK->bridge wire
+                for half in range(2):
+                    pips.setdefault(dest, {})[mk_clock_wname(device, src, half)] = fuses
+                continue
             pips.setdefault(dest, {})[src] = fuses
     return pips
 
@@ -5492,8 +5500,12 @@ _GW5AST_FUZZED_CELLS = {
     # DQS: the read-strobe block, one per DDR byte lane.  ttyp-241 = the DQS site (8 on the grid);
     # registering only the fuzzed io_tile made it a SINGLE-site bel, so a 2-byte-lane DDR3 PHY
     # (2x DQS) failed with "Unable to place cell 'DQS', no BELs remaining".  sites_ttyp folds all 8.
+    # Left-edge DQS sites (ttyp 257/259) measured by RVALID probes on gw_sh (impl/fuzz/ddr_dll):
+    # group0 IOL4 -> (9,0), group6 IOL94 -> (90,0), group7 IOL96 -> (99,0). Their config attrs are
+    # not fuzzed; the ttyp-241 tile-local offsets below are applied to them unverified.
     'DQS':  {'io_tile': (81, 5), 'cfg_tile': (72, 0),
              'sites_ttyp': 241,
+             'sites': [(9, 0), (90, 0), (99, 0)],
              'attrs': {
                  'DQS_MODE=X2_DDR3': [(20, 79, 7)],          # vs X4 baseline
                  'HWL=false':        [(20, 103, 7)],          # vs true
@@ -5511,7 +5523,9 @@ _GW5AST_FUZZED_CELLS = {
     # DSP: MULT27X36/MULT12X12 etc. ttyp-20 = the DSP bel; EXACTLY 298 tiles on rows
     # 18/36/54/72/90 == datasheet DSP=298 (exact, silicon-validated 164/298 used by fb).
     'DSP': {'io_tile': (18, 1), 'sites_ttyp': 20},   # io_tile is a real ttyp-20 head (no +1)
-    'DDRDLL': {'io_tile': (0, 0), 'cfg_tile': (0, 0),
+    # bel at (108,0) = the only ttyp-48 tile (carries the vendor DLL0 shortval, decoded from
+    # dqs00.fs IOL109 record); DIV_SEL/SCAL_EN/DLL_FORCE bit coords lie inside tile (0,0).
+    'DDRDLL': {'io_tile': (108, 0), 'cfg_tile': (0, 0),
                'attrs': {
                    'DIV_SEL=1':    [(18, 59, 7)],
                    'SCAL_EN=true': [(19, 72, 7)],
