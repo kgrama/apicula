@@ -7682,12 +7682,13 @@ class GW5AST_138C(GW5A):
         cd_bels = ef.get('clkdiv', {}).get('bels', {})
         idx = int(bel.idx_str[-1]) if bel.idx_str and bel.idx_str[-1].isdigit() else -1
         cd_bel = cd_bels.get(idx, {})
-        if 'divmode_fuses' in cd_bel:
-            dm = self.get_clkdiv_divmode(bel)
-            fuses = cd_bel['divmode_fuses'].get(dm)
-            if fuses is None:
-                raise Exception(f"Unsupported CLKDIV DIV_MODE {dm} at {bel.cell.name}")
-            return [CellFuseBits(bel.x, bel.y, {(r, c) for r, c in fuses})]
+        if idx >= 0:
+            # Vendor-decoded HCLKDIV<slot>_DIV codes (2->13, 3.5->14, 4->15, 5->16, 8->23, impl/fuzz/hclk)
+            # come from the HCLK shortval table of the control tile, not from the old row-21 one-hot table.
+            av = set()
+            self.chipdb.get_hclk_attr_val(AttrVal(f"HCLKDIV{idx}_DIV", self.get_clkdiv_divmode(bel)), av)
+            bits = self.chipdb.get_hclk_fuses(bel.x, bel.y, av)
+            return [CellFuseBits(bel.x, bel.y, bits)] if bits else []
         return super().get_CLKDIV_fuses(bel)
 
     #==============================
