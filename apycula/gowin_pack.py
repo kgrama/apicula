@@ -7456,13 +7456,15 @@ class GW5AST_138C(GW5A):
     #==============================
     # Deviations from the generic GW5A PLL attribute set, measured on 83 vendor bitstreams
     # (sbp-computational impl/fuzz/fuzz_report.json, tools/fuzz_all_fs.sh):
-    #  - KVCO is 7 with PLL_UNK211=2 for VCO >= 800 MHz (VCO 500/650 samples: KVCO 2, no UNK211);
+    #  - KVCO is 7 with PLL_UNK211=2 for VCO >= 650 MHz (current gw_sh, sbp-computational
+    #    impl/fuzz/pll_vco: VCO 650..1600 all KVCO 7/UNK211 2; legal VCO 650..1300 per gw_sh PA2078);
+    #    older-IDE samples at VCO 500/650 had KVCO 2 without UNK211;
     #  - FLDCOUNT has no VCO>1400 bump (VCO 1500 at 50 MHz input -> 32);
     #  - ODIVn_SEL is absent for disabled outputs n >= 1.
     # ICP_SEL and LPF_RES_SEL from the generic pump formula matched every static-ICP sample.
     def get_pll_kvco(self, fvco: float) -> tuple[int, bool]:
         """ (KVCO, set PLL_UNK211=2) """
-        if fvco < 800.0:
+        if fvco < 650.0:
             return (2, False)
         return (7, True)
 
