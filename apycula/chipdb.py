@@ -319,6 +319,17 @@ def set_corners_io(db, device):
 
 # This is clock bridge in GW5AST-138C
 bridge_tile_types_138 = {80, 81, 82, 83, 84, 85}
+# GW5AST-138C HCLK -> Center Clock Bridge input wires (clknames ids), measured clean-room
+# across all 24 CLKDIV sites (6 HCLK regions x 4 slots) via gw_sh bitstream diffs.
+_gw5ast_hclk_bridge_wires = {
+    0: [109, 110, 107, 108],  # HCLK0 (27, 0)   LEFTSIDE[0..3]
+    1: [105, 106, 220, 221],  # HCLK1 (81, 0)   LEFTSIDE[4..7]
+    2: [111, 112, 105, 106],  # HCLK2 (27, 181) RIGHTSIDE[0..3]
+    3: [111, 112, 226, 227],  # HCLK3 (81, 181) RIGHTSIDE[4..7]
+    4: [107, 108, 222, 223],  # HCLK4 (108, 64) BOTTOMSIDE[0..3]
+    5: [109, 110, 224, 225],  # HCLK5 (108,117) BOTTOMSIDE[4..7]
+}
+_gw5ast_hclk_bridge_srcids = {w for ws in _gw5ast_hclk_bridge_wires.values() for w in ws}
 
 # XXX GW1N-4 and GW1NS-4 have next data in dat.portmap['CmuxIns']:
 # 62 [11, 1, 126]
@@ -450,12 +461,14 @@ def fse_clock_pips_138(fse, ttyp, device):
                 # XXX skip 6 and 7 for now
                 if srcid in range(wnames.clknumbers['P16A'], wnames.clknumbers['P47D'] + 1):
                     continue
-                # XXX skip longwires
+                # XXX skip longwires (except HCLK->bridge clock inputs in bridge cells)
                 if srcid in range(164, 237):
-                    continue
-                # XXX ignore unknown wires
+                    if not (ttyp in bridge_tile_types_138 and srcid in _gw5ast_hclk_bridge_srcids):
+                        continue
+                # XXX ignore unknown wires (except HCLK->bridge clock inputs in bridge cells)
                 if srcid in range(105, 129):
-                    continue
+                    if not (ttyp in bridge_tile_types_138 and srcid in _gw5ast_hclk_bridge_srcids):
+                        continue
                 if srcid in range(253, 269):
                     continue
 
@@ -474,8 +487,8 @@ def fse_clock_pips_138(fse, ttyp, device):
                         if not src.startswith('CBRIDGEOUT') or not is_allowed_spine_input(src, dest):
                             continue
                     else:
-                        # bridge spines may get signal from logic->gates and these gates must have suffix
-                        if srcid not in range(139, 163):
+                        # bridge spines may get signal from logic->gates or HCLK->bridge wires and must have suffix
+                        if srcid not in range(139, 163) and srcid not in _gw5ast_hclk_bridge_srcids:
                             continue
                         src = mk_clock_wname(device, src, half)
 
@@ -1585,9 +1598,28 @@ def gw5_add_hclk_bels(dat, dev, device):
                 add_node(dev, f'HCLK{hclk_idx}_HCLK_BUF_BI{hclk_idx}{i}',
                          "GLOBAL_CLK", row, col, portmap['HCLKIN'])
                 portmap = clkdiv.setdefault('outputs', {})
-                portmap['CLKOUT'] = f'HCLK_BUF_BO{hclk_idx}{i}'
+                portmap['CLKOUT'] = f'CLKDIV_O{hclk_idx}{i}'
+                dev.wire_delay[portmap['CLKOUT']] = 'X0'
+                # Route CLKOUT (HCLK wire type so globals.cc src_is_outpin is true)
+                # into HCLK_BUF_BO{hclk_idx}{i}, which connects via table 48 to
+                # HCLK_MUX_ALPHA{hclk_idx}{i} in the HCLK control tile.
+                dev.hclk_pips.setdefault((row, col), {}).setdefault(
+                    f'HCLK_BUF_BO{hclk_idx}{i}', {}).update({portmap['CLKOUT']: set()})
                 add_node(dev, f'HCLK{hclk_idx}_HCLK_BUF_BO{hclk_idx}{i}',
-                         "GLOBAL_CLK", row, col, portmap['CLKOUT'])
+                         "GLOBAL_CLK", row, col, f'HCLK_BUF_BO{hclk_idx}{i}')
+                # Connect HCLK_MUX_ALPHA{hclk_idx}{i} into the Center Clock Bridge
+                # global clock input wires (TOP and BOT halves) so CLKDIV outputs
+                # reach the global clock spine network.
+                alpha_wire = f'HCLK_MUX_ALPHA{hclk_idx}{i}'
+                add_node(dev, f'HCLK{hclk_idx}_{alpha_wire}',
+                         "GLOBAL_CLK", row, col, alpha_wire)
+                brg_srcid = _gw5ast_hclk_bridge_wires[hclk_idx][i]
+                brg_base = wnames.clknames[brg_srcid]
+                for half in range(2):
+                    brg_wname = mk_clock_wname(device, brg_base, half)
+                    dev.hclk_pips.setdefault((row, col), {}).setdefault(
+                        brg_wname, {}).update({alpha_wire: set()})
+                    add_node(dev, brg_wname, "GLOBAL_CLK", row, col, brg_wname)
             else:
                 portmap['HCLKIN'] = f'CLKDIV_I{hclk_idx}{i}'
                 portmap['RESETN'] = f'C{i + 4}'  # GW5A-25A 0-C4, 1-C5, 2-C6, 3-C7
@@ -7813,6 +7845,13 @@ def fse_wire_delays(db, dev):
             db.wire_delay[wnames.clknames[i]] = "CENT_SPINE_PCLK"
             db.wire_delay[mk_clock_wname(dev, wnames.clknames[i], 0)] = "CENT_SPINE_PCLK"
             db.wire_delay[mk_clock_wname(dev, wnames.clknames[i], 1)] = "CENT_SPINE_PCLK"
+        for i in _gw5ast_hclk_bridge_srcids: # clock inputs (HCLK->bridge)
+            db.wire_delay[wnames.clknames[i]] = "CENT_SPINE_PCLK"
+            db.wire_delay[mk_clock_wname(dev, wnames.clknames[i], 0)] = "CENT_SPINE_PCLK"
+            db.wire_delay[mk_clock_wname(dev, wnames.clknames[i], 1)] = "CENT_SPINE_PCLK"
+        for hclk_idx in range(6):
+            for i in range(4):
+                db.wire_delay[f'CLKDIV_O{hclk_idx}{i}'] = 'X0'
     for i in range(1000, 1002): # HCLK bridge muxes
         db.wire_delay[wnames.clknames[i]] = "HclkHbrgMux"
     for i in range(1002, 1010): # HCLK
