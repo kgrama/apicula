@@ -3029,6 +3029,9 @@ def _fse_create_one_bottom_pll(dev, device, fse, dat, row, col):
     # center share BLPLL0, those right of center share BRPLL0 (the silicon has exactly 2
     # bottom spine entries, each with 4 clocks -> only CLKOUT0..3 reach the global spine).
     spine_side = 'BL' if col < dat.grid.center_x - 1 else 'BR'
+    # Measured (impl/fuzz/pll_matrix): PLL_B2 (col 146) -> BRPLL0, PLL_B3 (col 150) -> BLPLL0.
+    # PLL_B0/B1 reached no PLL spine source in those builds; they keep the column rule.
+    spine_side = {150: 'BL'}.get(col, spine_side)
 
     outputs = bpll.setdefault('outputs', {})
     for idx, nam in _bpll_outputs:
@@ -3085,11 +3088,14 @@ def _fse_create_one_bottom_pll(dev, device, fse, dat, row, col):
 # hypothesis (rows 27/45 -> group 0, rows 63/81 -> group 1); the 8-site spine fuzz
 # (fuzz_lr_pll_spine.sh) confirms per-site placement is distinct in the bitstream.
 # Rows 45/63: the IDIV/FBDIV PLL table is on col 0 (ttyp 268/270), companions 75/76 at cols 1/2.
+# pll_idx measured from one-PLL-per-site gw_sh builds with CLOCK_LOC BUFG on CLKOUT0..3
+# (sbp-computational impl/fuzz/pll_matrix): L0/L2 -> TLPLL0, L1/L3 -> TLPLL1, R0/R2 -> TRPLL0,
+# R1/R3 -> TRPLL1.
 _LRPLL_SITES = [
-    (27,   1, 'TL', 0), (45,   0, 'TL', 0),
-    (63,   0, 'TL', 1), (81,   1, 'TL', 1),
-    (27, 177, 'TR', 0), (45, 178, 'TR', 0),
-    (63, 178, 'TR', 1), (81, 177, 'TR', 1),
+    (27,   1, 'TL', 0), (45,   0, 'TL', 1),
+    (63,   0, 'TL', 0), (81,   1, 'TL', 1),
+    (27, 177, 'TR', 0), (45, 178, 'TR', 1),
+    (63, 178, 'TR', 0), (81, 177, 'TR', 1),
 ]
 
 def fse_create_lr_plls(dev, device, fse, dat):
