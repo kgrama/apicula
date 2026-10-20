@@ -7543,6 +7543,46 @@ class GW5AST_138C(GW5A):
         """ The vendor sets no TXCLK_POL/GSR rows on this chip. """
         return []
 
+    def iologic_partner_cell(self, bel: IologicBelDesc) -> CellDesc | None:
+        """ The OSER*_MEM (IOLOGIC<idx>O) and IDES*_MEM (IOLOGIC<idx>I) of a bidirectional DQ pad are
+        separate cells; return the one sharing this site. """
+        if not hasattr(self, '_iologic_by_bel'):
+            cells = self.pnr.in_file['modules'][self.pnr.top_module_name]['cells']
+            self._iologic_by_bel = {c['attributes'].get('NEXTPNR_BEL'): n for n, c in cells.items()
+                                    if c['attributes'].get('NEXTPNR_BEL', '').find('/IOLOGIC') > 0}
+        own = bel.cell.attrs.get('NEXTPNR_BEL', '')
+        if own[-1:] not in ('I', 'O'):
+            return None
+        name = self._iologic_by_bel.get(own[:-1] + ('O' if own[-1] == 'I' else 'I'))
+        return self.pnr.get_cell(name) if name else None
+
+    def set_iologic_bel_fclk(self, bel: IologicBelDesc) -> IologicBelDesc:
+        bel = super().set_iologic_bel_fclk(bel)
+        partner = self.iologic_partner_cell(bel)
+        if partner is None:
+            return bel
+        outmode = bel.main_cell_outmode or partner.parms.get('OUTMODE')
+        inmode = bel.main_cell_inmode or partner.parms.get('INMODE')
+        return IologicBelDesc(bel.x, bel.y, bel.idx_str, bel.cell, bel.fclk, outmode, inmode)
+
+    def get_merged_iodelay_fuses(self, bel: IologicBelDesc) -> list[CellFuseBits]:
+        """ C_STATIC_DLY of an IODELAY merged into the IOLOGIC (attrs IODELAY). The fuzzed tables
+        exist only at the 48 bottom-edge sites (ttyp 247); other sites emit nothing. """
+        if not bel.cell.attrs.get('IODELAY') or 'C_STATIC_DLY' not in bel.cell.parms:
+            return []
+        x, y = bel.x, bel.y
+        off = self.chipdb.get_iob_fuse_cell_offset(x, y, bel.idx_str)
+        for cx, cy in ((x, y), (x + off[1], y + off[0]) if off else (x, y)):
+            if 'IODELAY' in self.chipdb.db.extra_func.get((cy, cx), {}).get('fuzzed_attrs', {}):
+                dly = CellDesc(bel.cell.name, 'IODELAY', {'C_STATIC_DLY': bel.cell.parms['C_STATIC_DLY']},
+                               bel.cell.attrs, bel.cell.connections)
+                bits = self.get_fuzzed_attr_fuses(BelDesc(cx, cy, bel.idx_str, dly))
+                return [CellFuseBits(cx, cy, bits)] if bits else []
+        return []
+
+    def common_in_iologic_handler(self, bel: IologicBelDesc) -> list[CellFuseBits]:
+        return super().common_in_iologic_handler(bel) + self.get_merged_iodelay_fuses(self.make_IologicBelDesc(bel))
+
     def set_iologic_attrvals(self, bel: IologicBelDesc, attr_vals: list[AttrVal]) -> set[int]:
         """ Like GW5A but accepts raw integer values for attributes without named values. """
         av = set()
