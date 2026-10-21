@@ -267,7 +267,14 @@ run pnr
             with open(tmpdir+"/run.tcl", "w") as f:
                 self.write(f, cst=cst, netlist=netlist)
 
-            subprocess.run(["/usr/bin/env", "LD_PRELOAD=" + self.gowinhome + "/Programmer/bin/libfontconfig.so.1", self.gowinhome + "/IDE/bin/gw_sh", tmpdir+"/run.tcl"], cwd = tmpdir)
+            # gw_sh is a Tcl shell; run headless with QT_QPA_PLATFORM=minimal.
+            # (offscreen -> GLX core-dump; default -> needs xcb/X display.  minimal
+            #  skips GL entirely; no Xvfb needed.)  GWSH override lets callers point at
+            #  a specific gw_sh; default to the flat /opt install that works headless.
+            gwsh = os.getenv("GWSH") or "/opt/gowin-eda-ide/bin/gw_sh"
+            run_env = dict(os.environ)
+            run_env["QT_QPA_PLATFORM"] = "minimal"
+            subprocess.run([gwsh, tmpdir+"/run.tcl"], cwd=tmpdir, env=run_env)
             #print(tmpdir); input()
             try:
                 constrs = self.cst if isinstance(self.cst, Constraints) else Constraints()

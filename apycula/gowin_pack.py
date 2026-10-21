@@ -36,6 +36,11 @@ class CliArgs:
         parser.add_argument('--reconfign_as_gpio', action = 'store_true')
         parser.add_argument('--cpu_as_gpio', action = 'store_true')
         parser.add_argument('--i2c_as_gpio', action = 'store_true')
+        parser.add_argument('--transplant', action = 'append', default = [],
+                            help = 'JSON {"row,col": {"ttyp": n, "bits": [[r, c], ...]}} of raw tile bits copied from a vendor '
+                                   'bitstream (tools/extract_block_bits.py region_*.json); ORed into the output. Repeatable.')
+        parser.add_argument('--serdes_csr', default = None,
+                            help = 'GTR12 SerDes CSR write file (upar_write_driver(0xADDR,0xDATA) per line) to bake into the bitstream header')
         parser.add_argument(
             '--multiboot_address',
             type=lambda value: int(value, 0),
@@ -421,7 +426,7 @@ class Netlist:
         # Therefore, we will postpone their generation until after normal IOs, once the standard has been clarified.
         yield_later = []
 
-        belre = re.compile(r"X(\d+)Y(\d+)/(?:GSR|LUT|DFF|IOB|MUX|ALU|ODDR|OSC[ZFHWOA]?|BUF[GS]|RAM16SDP4|RAM16SDP2|RAM16SDP1|PLL|IOLOGIC|CLKDIV2|CLKDIV|BSRAM|ALU|MULTALU18X18|MULTALU27X18|MULTALU36X18|MULTADDALU18X18|MULTADDALU12X12|MULT36X36|MULT18X18|MULT12X12|MULT9X9|PADD18|PADD9|BANDGAP|DQCE|DCS|USERFLASH|EMCU|DHCEN|MIPI_OBUF|MIPI_IBUF|DLLDLY|PINCFG|PLLA|ADC|GW_JTAG)(\w*)")
+        belre = re.compile(r"X(\d+)Y(\d+)/(?:GSR|LUT|DFF|IOB|MUX|ALU|ODDR|OSC[ZFHWOA]?|BUF[GS]|RAM16SDP4|RAM16SDP2|RAM16SDP1|PLL|IOLOGIC|CLKDIV2|CLKDIV|BSRAM|ALU|MULTALU18X18|MULTALU27X18|MULTALU36X18|MULTADDALU18X18|MULTADDALU12X12|MULT36X36|MULT18X18|MULT12X12|MULT9X9|PADD18|PADD9|BANDGAP|DQCE|DCS|USERFLASH|EMCU|DHCEN|MIPI_OBUF|MIPI_IBUF|DLLDLY|PINCFG|PLLA|ADC|GW_JTAG|GTR12_QUAD|DQS|DDRDLL|IODELAY)(\w*)")
         for cell_name, cell_data in self.in_file['modules'][self.top_module_name]['cells'].items():
             cell = self.fill_cell_desc(cell_name, cell_data)
             bel_attr = cell.attrs.get('NEXTPNR_BEL')
@@ -436,7 +441,7 @@ class Netlist:
             if cell.typ == 'IOB':
                 bel = IoBelDesc(x, y, idx, cell)
             elif cell.typ in {'IOLOGIC', 'IOLOGICI', 'IOLOGICO', 'IOLOGIC_DUMMY', 'ODDR', 'ODDRC', 'OSER4',
-                   'OSER8', 'OSER10', 'OVIDEO', 'IDDR', 'IDDRC', 'IDES4', 'IDES8', 'IDES10', 'IVIDEO',
+                   'OSER4_MEM', 'OSER8', 'OSER8_MEM', 'OSER10', 'OVIDEO', 'IDDR', 'IDDRC', 'IDES4', 'IDES4_MEM', 'IDES8', 'IDES8_MEM', 'IDES10', 'IVIDEO',
                    'IOLOGICI_EMPTY', 'IOLOGICO_EMPTY'}:
                 if idx[-1] in 'IO':
                     idx = idx[:-1]
@@ -540,7 +545,8 @@ class ChipDB:
 
     def get_iob_fuse_cell_offset(self, x: int, y: int, idx_str: str) -> Coord:
         """ Return IOB fuse cell """
-        return self.get_tiledata(x, y).bels[f'IOB{idx_str}'].fuse_cell_offset
+        bel = self.get_tiledata(x, y).bels.get(f'IOB{idx_str}')
+        return bel.fuse_cell_offset if bel else None
 
     def get_alu_modes(self, x: int, y: int, idx: int) -> dict[int, set[Coord]]:
         return self.get_tiledata(x, y).bels[f'ALU{idx}'].modes
@@ -835,7 +841,9 @@ class BankDesc:
                 'LVCMOS33': '3.3', 'LVDS25': '2.5', 'LVDS25E': '2.5', 'LVCMOS33D': '3.3', 'LVCMOS_D': '3.3', 'MIPI': '1.2',
                 'SSTL15': '1.5', 'SSTL18_I': '1.8', 'SSTL18_II': '1.8', 'SSTL25_I': '2.5', 'SSTL25_II': '2.5',
                 'SSTL33_I': '3.3', 'SSTL33_II': '3.3', 'SSTL15D': '1.5', 'SSTL18D_I': '1.8', 'SSTL18D_II': '1.8',
-                'SSTL25D_I': '2.5', 'SSTL25D_II': '2.5', 'SSTL33D_I': '3.3', 'SSTL33D_II': '3.3', 'MIPI': '2.5'}
+                'SSTL25D_I': '2.5', 'SSTL25D_II': '2.5', 'SSTL33D_I': '3.3', 'SSTL33D_II': '3.3', 'MIPI': '2.5',
+                'SSTL': '1.5', 'SSTL_D': '1.5', 'HSTL': '1.5', 'HSTL_D': '1.5',
+                'SSTL15_5A': '1.5', 'SSTL15D_5A': '1.5', 'LVPECL33E': '3.3', 'LVPECL33': '3.3', 'LVPECL_E': '3.3'}
 
     def __init__(self, x: int, y: int):
         self.x, self.y = x, y
@@ -926,7 +934,10 @@ class BankDesc:
         """ Add IO to the bank """
         self.bels.append(bel)
         self.check_or_set_attr(bel, 'PULL_STRENGTH')
-        if not bel.is_diff_io():
+        # Differential IO_TYPE standards set on an IOB cell (e.g. LVDS25 sense input or LVPECL33E on USB pads)
+        # do not constrain single-ended bank IO_TYPE, only BANK_VCCIO when driven as output.
+        diff_io_types = {'LVDS25', 'LVDS25E', 'BLVDS_E', 'MLVDS_E', 'RSDS25', 'RSDS_E', 'LVPECL_E', 'LVPECL33E', 'LVPECL33', 'LVCMOS_D'}
+        if not bel.is_diff_io() and bel.cell.attrs.get('IO_TYPE') not in diff_io_types:
             self.check_or_set_attr(bel, 'IO_TYPE')
             if 'IS_OUTPUT' in bel.flags:
                 self.check_or_set_attr(bel, 'BANK_VCCIO')
@@ -1871,8 +1882,11 @@ class Device:
     def process_IBUF(self, bank_desc: BankDesc, bel: IoBelDesc) -> list[CellFuseBits]:
         av = self.set_io_attrvals(bel, self.default_ibuf_attrs)
         fuses = []
-        if not bank_desc.has_outputs:
-            io_type = bel.cell.attrs.get('IO_TYPE', self.get_default_io_type())
+        cell_io_type = bel.cell.attrs.get('IO_TYPE')
+        if cell_io_type:
+            self.chipdb.get_iob_attr_val(AttrVal("IO_TYPE", cell_io_type), av)
+        elif not bank_desc.has_outputs:
+            io_type = self.get_default_io_type()
             self.chipdb.get_iob_attr_val(AttrVal("IO_TYPE", io_type), av)
         else:
             self.chipdb.get_iob_attr_val(AttrVal("IO_TYPE", bank_desc.io_type), av)
@@ -1883,7 +1897,7 @@ class Device:
     def process_TBUF(self, bank_desc: BankDesc, bel: IoBelDesc) -> list[CellFuseBits]:
         av = self.set_io_attrvals(bel, self.default_tbuf_attrs)
         fuses = []
-        self.chipdb.get_iob_attr_val(AttrVal("IO_TYPE", bank_desc.io_type), av)
+        self.chipdb.get_iob_attr_val(AttrVal("IO_TYPE", bel.cell.attrs.get('IO_TYPE') or bank_desc.io_type), av)
         self.chipdb.get_iob_attr_val(AttrVal("BANK_VCCIO", bank_desc.bank_vccio), av)
         fuses += self.get_iob_fuses(bel.x, bel.y, bel.idx_str, av)
         return fuses
@@ -1891,7 +1905,7 @@ class Device:
     def process_IOBUF(self, bank_desc: BankDesc, bel: IoBelDesc) -> list[CellFuseBits]:
         if bel.is_i3c_io():
             av = self.set_io_attrvals(bel, self.default_i3c_iobuf_attrs, defaults_only = True)
-            self.chipdb.get_iob_attr_val(AttrVal("IO_TYPE", bank_desc.io_type), av)
+            self.chipdb.get_iob_attr_val(AttrVal("IO_TYPE", bel.cell.attrs.get('IO_TYPE') or bank_desc.io_type), av)
         elif bel.is_mipi_in():
             if bel.idx_str == 'A':
                 av = self.set_io_attrvals(bel, self.default_mipi_iobuf_attrs, defaults_only = True)
@@ -1900,7 +1914,7 @@ class Device:
                 av = self.set_io_attrvals(bel, self.default_mipi_iobuf_attrs, defaults_only = True)
         else:
             av = self.set_io_attrvals(bel, self.default_iobuf_attrs)
-            self.chipdb.get_iob_attr_val(AttrVal("IO_TYPE", bank_desc.io_type), av)
+            self.chipdb.get_iob_attr_val(AttrVal("IO_TYPE", bel.cell.attrs.get('IO_TYPE') or bank_desc.io_type), av)
         fuses = []
         self.chipdb.get_iob_attr_val(AttrVal("BANK_VCCIO", bank_desc.bank_vccio), av)
         self.set_iobuf_attrs(bel, av)
@@ -2251,6 +2265,10 @@ class Device:
     def make_IologicBelDesc(self, bel: BelDesc) -> IologicBelDesc:
         return IologicBelDesc(bel.x, bel.y, bel.idx_str, bel.cell, bel.fclk, bel.main_cell_outmode, bel.main_cell_inmode)
 
+    def get_iologic_cell_fuses(self, x: int, y: int, idx_str: str, av: set[int]) -> list[CellFuseBits]:
+        bits = self.chipdb.get_iologic_fuses(x, y, av, idx_str)
+        return [CellFuseBits(x, y, bits)] if bits else []
+
     def common_out_iologic_handler(self, bel: IologicBelDesc) -> list[CellFuseBits]:
         iol_bel = self.make_IologicBelDesc(bel)
         iol_bel = self.set_iologic_bel_fclk(iol_bel)
@@ -2258,11 +2276,7 @@ class Device:
         attr_vals += self.get_out_iologic_attrs(iol_bel)
 
         av = self.set_iologic_attrvals(iol_bel, attr_vals)
-        fuses = []
-        bits = self.chipdb.get_iologic_fuses(iol_bel.x, iol_bel.y, av, iol_bel.idx_str)
-        if bits:
-            fuses.append(CellFuseBits(iol_bel.x, iol_bel.y, bits))
-        return fuses
+        return self.get_iologic_cell_fuses(iol_bel.x, iol_bel.y, iol_bel.idx_str, av)
 
     def common_in_iologic_handler(self, bel: IologicBelDesc) -> list[CellFuseBits]:
         iol_bel = self.make_IologicBelDesc(bel)
@@ -2271,11 +2285,7 @@ class Device:
         attr_vals += self.get_in_iologic_attrs(iol_bel)
 
         av = self.set_iologic_attrvals(iol_bel, attr_vals)
-        fuses = []
-        bits = self.chipdb.get_iologic_fuses(iol_bel.x, iol_bel.y, av, iol_bel.idx_str)
-        if bits:
-            fuses.append(CellFuseBits(iol_bel.x, iol_bel.y, bits))
-        return fuses
+        return self.get_iologic_cell_fuses(iol_bel.x, iol_bel.y, iol_bel.idx_str, av)
 
 
     def get_ODDR_fuses(self, bel: BelDesc) -> list[CellFuseBits]:
@@ -2284,11 +2294,7 @@ class Device:
         attr_vals += self.get_out_iologic_attrs(iol_bel)
 
         av = self.set_iologic_attrvals(iol_bel, attr_vals)
-        fuses = []
-        bits = self.chipdb.get_iologic_fuses(iol_bel.x, iol_bel.y, av, iol_bel.idx_str)
-        if bits:
-            fuses.append(CellFuseBits(iol_bel.x, iol_bel.y, bits))
-        return fuses
+        return self.get_iologic_cell_fuses(iol_bel.x, iol_bel.y, iol_bel.idx_str, av)
 
     def get_ODDRC_fuses(self, bel: BelDesc) -> list[CellFuseBits]:
         return self.get_ODDR_fuses(bel)
@@ -2297,6 +2303,12 @@ class Device:
         return self.common_out_iologic_handler(bel)
 
     def get_OSER8_fuses(self, bel: BelDesc) -> list[CellFuseBits]:
+        return self.common_out_iologic_handler(bel)
+
+    def get_OSER8_MEM_fuses(self, bel: BelDesc) -> list[CellFuseBits]:
+        return self.common_out_iologic_handler(bel)
+
+    def get_OSER4_MEM_fuses(self, bel: BelDesc) -> list[CellFuseBits]:
         return self.common_out_iologic_handler(bel)
 
     def get_OSER10_fuses(self, bel: BelDesc) -> list[CellFuseBits]:
@@ -2311,11 +2323,7 @@ class Device:
         attr_vals += self.get_in_iologic_attrs(iol_bel)
 
         av = self.set_iologic_attrvals(iol_bel, attr_vals)
-        fuses = []
-        bits = self.chipdb.get_iologic_fuses(iol_bel.x, iol_bel.y, av, iol_bel.idx_str)
-        if bits:
-            fuses.append(CellFuseBits(iol_bel.x, iol_bel.y, bits))
-        return fuses
+        return self.get_iologic_cell_fuses(iol_bel.x, iol_bel.y, iol_bel.idx_str, av)
 
     def get_IDDRC_fuses(self, bel: BelDesc) -> list[CellFuseBits]:
         return self.get_IDDR_fuses(bel)
@@ -2324,6 +2332,12 @@ class Device:
         return self.common_in_iologic_handler(bel)
 
     def get_IDES8_fuses(self, bel: BelDesc) -> list[CellFuseBits]:
+        return self.common_in_iologic_handler(bel)
+
+    def get_IDES8_MEM_fuses(self, bel: BelDesc) -> list[CellFuseBits]:
+        return self.common_in_iologic_handler(bel)
+
+    def get_IDES4_MEM_fuses(self, bel: BelDesc) -> list[CellFuseBits]:
         return self.common_in_iologic_handler(bel)
 
     def get_IDES10_fuses(self, bel: BelDesc) -> list[CellFuseBits]:
@@ -2342,33 +2356,20 @@ class Device:
             attr_vals += self.get_in_iologic_attrs(iol_bel)
 
         av = self.set_iologic_attrvals(iol_bel, attr_vals)
-        fuses = []
-        bits = self.chipdb.get_iologic_fuses(iol_bel.x, iol_bel.y, av, iol_bel.idx_str)
-        if bits:
-            fuses.append(CellFuseBits(iol_bel.x, iol_bel.y, bits))
-        return fuses
+        return self.get_iologic_cell_fuses(iol_bel.x, iol_bel.y, iol_bel.idx_str, av)
 
     def get_IOLOGICI_EMPTY_fuses(self, bel: BelDesc) -> list[CellFuseBits]:
         iol_bel = self.make_IologicBelDesc(bel)
         attr_vals = self.common_iologic_handler(iol_bel)
 
         av = self.set_iologic_attrvals(iol_bel, attr_vals)
-        fuses = []
-        bits = self.chipdb.get_iologic_fuses(iol_bel.x, iol_bel.y, av, iol_bel.idx_str)
-        if bits:
-            fuses.append(CellFuseBits(iol_bel.x, iol_bel.y, bits))
-        return fuses
+        return self.get_iologic_cell_fuses(iol_bel.x, iol_bel.y, iol_bel.idx_str, av)
 
     def get_IOLOGICO_EMPTY_fuses(self, bel: BelDesc) -> list[CellFuseBits]:
         iol_bel = self.make_IologicBelDesc(bel)
         attr_vals = self.common_iologic_handler(iol_bel)
-
-
-        fuses = []
-        bits = self.chipdb.get_iologic_fuses(iol_bel.x, iol_bel.y, av, iol_bel.idx_str)
-        if bits:
-            fuses.append(CellFuseBits(iol_bel.x, iol_bel.y, bits))
-        return fuses
+        av = self.set_iologic_attrvals(iol_bel, attr_vals)
+        return self.get_iologic_cell_fuses(iol_bel.x, iol_bel.y, iol_bel.idx_str, av)
 
     def get_IOLOGIC_fuses(self, bel: BelDesc) -> list[CellFuseBits]:
         self.error_not_supported_cell_type(bel)
@@ -5330,6 +5331,41 @@ class GW5A(Device):
                  ('SINGLERESISTOR', 'OFF'), ('DDR_DYNTERM', 'NA'),
                  ('PERSISTENT', 'OFF'), ('ODMUX', 'TRIMUX'), ('PADDI', 'PADDI'),
                  ('OPENDRAIN', 'OFF'), ('PULL_STRENGTH', 'MEDIUM'), ('IOB_UNKNOWN51', 'TRIMUX')]
+        # default attrs for DSP
+        self.multaddalu12x12_defaults = [
+                ('A0REG_CLK', 'BYPASS'), ('A0REG_CE', 'CE0'), ('A0REG_RESET', 'RESET0'),
+                ('B0REG_CLK', 'BYPASS'), ('B0REG_CE', 'CE0'), ('B0REG_RESET', 'RESET0'),
+                ('A1REG_CLK', 'BYPASS'), ('A1REG_CE', 'CE0'), ('A1REG_RESET', 'RESET0'),
+                ('B1REG_CLK', 'BYPASS'), ('B1REG_CE', 'CE0'), ('B1REG_RESET', 'RESET0'),
+                ('ADDSUB0_IREG_CLK', 'BYPASS'), ('ADDSUB0_IREG_CE', 'CE0'), ('ADDSUB0_IREG_RESET', 'RESET0'),
+                ('ADDSUB0_PREG_CLK', 'BYPASS'), ('ADDSUB0_PREG_CE', 'CE0'), ('ADDSUB0_PREG_RESET', 'RESET0'),
+                ('ADDSUB1_IREG_CLK', 'BYPASS'), ('ADDSUB1_IREG_CE', 'CE0'), ('ADDSUB1_IREG_RESET', 'RESET0'),
+                ('ADDSUB1_PREG_CLK', 'BYPASS'), ('ADDSUB1_PREG_CE', 'CE0'), ('ADDSUB1_PREG_RESET', 'RESET0'),
+                ('CASISEL_IREG_CLK', 'BYPASS'), ('CASISEL_IREG_CE', 'CE0'), ('CASISEL_IREG_RESET', 'RESET0'),
+                ('CASISEL_PREG_CLK', 'BYPASS'), ('CASISEL_PREG_CE', 'CE0'), ('CASISEL_PREG_RESET', 'RESET0'),
+                ('MULT_RESET_MODE', 'SYNC'), ('ADD_SUB_0', 0), ('DYN_ADD_SUB_0', 'FALSE'), ('FB_PREG_EN', 'FALSE'),
+                ('ADD_SUB_1', 0), ('DYN_ADD_SUB_1', 'FALSE'), ('CASI_SEL', 0), ('ACC_SEL', 0), ('DYN_ACC_SEL', 'FALSE'),
+                ]
+        self.multalu27x18_defaults = [
+                ('C_IREG_CLK', 'BYPASS'), ('C_IREG_CE', 'CE0'), ('C_IREG_RESET', 'RESET0'),
+                ('C_PREG_CLK', 'BYPASS'), ('C_PREG_CE', 'CE0'), ('C_PREG_RESET', 'RESET0'),
+                ('PADDSUB_IREG_CLK', 'BYPASS'), ('PADDSUB_IREG_CE', 'CE0'), ('PADDSUB_IREG_RESET', 'RESET0'),
+                ('PSEL_IREG_CLK', 'BYPASS'), ('PSEL_IREG_CE', 'CE0'), ('PSEL_IREG_RESET', 'RESET0'),
+                ('CSEL_IREG_CLK', 'BYPASS'), ('CSEL_IREG_CE', 'CE0'), ('CSEL_IREG_RESET', 'RESET0'),
+                ('CSEL_PREG_CLK', 'BYPASS'), ('CSEL_PREG_CE', 'CE0'), ('CSEL_PREG_RESET', 'RESET0'),
+                ('ADDSUB0_IREG_CLK', 'BYPASS'), ('ADDSUB0_IREG_CE', 'CE0'), ('ADDSUB0_IREG_RESET', 'RESET0'),
+                ('ADDSUB0_PREG_CLK', 'BYPASS'), ('ADDSUB0_PREG_CE', 'CE0'), ('ADDSUB0_PREG_RESET', 'RESET0'),
+                ('ADDSUB1_IREG_CLK', 'BYPASS'), ('ADDSUB1_IREG_CE', 'CE0'), ('ADDSUB1_IREG_RESET', 'RESET0'),
+                ('ADDSUB1_PREG_CLK', 'BYPASS'), ('ADDSUB1_PREG_CE', 'CE0'), ('ADDSUB1_PREG_RESET', 'RESET0'),
+                ('CASISEL_IREG_CLK', 'BYPASS'), ('CASISEL_IREG_CE', 'CE0'), ('CASISEL_IREG_RESET', 'RESET0'),
+                ('CASISEL_PREG_CLK', 'BYPASS'), ('CASISEL_PREG_CE', 'CE0'), ('CASISEL_PREG_RESET', 'RESET0'),
+                ('MULT_RESET_MODE', 'SYNC'), ('ADD_SUB_0', 0), ('DYN_ADD_SUB_0', 'FALSE'), ('FB_PREG_EN', 'FALSE'),
+                ('ADD_SUB_1', 0), ('DYN_ADD_SUB_1', 'FALSE'), ('ACC_SEL', 0), ('DYN_ACC_SEL', 'FALSE'),
+                ('SOA_PREG_EN', 'FALSE'), ('A_SEL', 0), ('DYN_A_SEL', 'FALSE'), ('P_SEL', 0), ('DYN_P_SEL', 'FALSE'),
+                ('P_ADDSUB', 0), ('DYN_P_ADDSUB', 'FALSE'), ('ADD_SUB_0', 0), ('DYN_ADD_SUB_0', 'FALSE'),
+                ('ADD_SUB_1', 0), ('DYN_ADD_SUB_1', 'FALSE'), ('ACC_SEL', 0),
+                ('DYN_ACC_SEL', 'FALSE'), ('C_SEL', 0), ('DYN_C_SEL', 'FALSE'), ('MULT12X12_EN', 'FALSE')
+                ]
 
     def get_extra_slots(self) -> dict[int, any]:
         return self.extra_slots
@@ -5568,6 +5604,15 @@ class GW5A(Device):
         if bits:
             fuses.append(CellFuseBits(x, y, bits))
         return fuses
+
+    def get_iologic_cell_fuses(self, x: int, y: int, idx_str: str, av: set[int]) -> list[CellFuseBits]:
+        """ IOLOGICB fuses live in the IOBB fuse cell (ttyp 244 one row below ttyp 243 on GW5AST-138C). """
+        fuse_cell_offset = self.chipdb.get_iob_fuse_cell_offset(x, y, idx_str)
+        if fuse_cell_offset:
+            x += fuse_cell_offset[1]
+            y += fuse_cell_offset[0]
+        bits = self.chipdb.get_iologic_fuses(x, y, av, idx_str)
+        return [CellFuseBits(x, y, bits)] if bits else []
 
     #==============================
     #========== Clocks
@@ -5836,6 +5881,227 @@ class GW5A(Device):
                 y += 1
         return bsram_init_map
 
+    def check_elvds_placement(self, bel: IoBelDesc):
+        """ On GW5A/GW5AST, a True LVDS pin is a superset and can also drive emulated LVDS (LVCMOS33D). """
+        io_diff_cfg = self.chipdb.get_io_diff_cfg(bel.x, bel.y, bel.idx_str)
+        if not io_diff_cfg:
+            raise Exception(f"X{bel.x}Y{bel.y}/IOB{bel.idx_str} ({bel.cell.name}) cannot be placed - location is not a LVDS pin")
+        if io_diff_cfg.positive != (bel.cell.parms.get('DIFF') == 'P'):
+            raise Exception(f"X{bel.x}Y{bel.y}/IOB{bel.idx_str} ({bel.cell.name}) cannot be placed - pin P must be IOBA, pin N must be IOBB")
+
+    def process_IOBUF(self, bank_desc: BankDesc, bel: IoBelDesc) -> list[CellFuseBits]:
+        if bel.is_i3c_io():
+            av = self.set_io_attrvals(bel, self.default_i3c_iobuf_attrs, defaults_only = True)
+            self.chipdb.get_iob_attr_val(AttrVal("IO_TYPE", bank_desc.io_type), av)
+        elif bel.is_mipi_in():
+            if bel.idx_str == 'A':
+                av = self.set_io_attrvals(bel, self.default_mipi_iobuf_attrs, defaults_only = True)
+                self.chipdb.get_iob_attr_val(AttrVal("IO_TYPE", "LVDS25"), av)
+            else:
+                av = self.set_io_attrvals(bel, self.default_mipi_iobuf_attrs, defaults_only = True)
+        else:
+            av = self.set_io_attrvals(bel, self.default_iobuf_attrs)
+            self.chipdb.get_iob_attr_val(AttrVal("IO_TYPE", bank_desc.io_type), av)
+        fuses = []
+        self.chipdb.get_iob_attr_val(AttrVal("BANK_VCCIO", bank_desc.bank_vccio), av)
+        self.set_iobuf_attrs(bel, av)
+        if int(bel.cell.parms.get("IOLOGIC_IOB", "0"), 2) and bel.get_iob_pin_net('OEN') == IO_BEL_NET_NET:
+            self.chipdb.get_iob_attr_val(AttrVal("TRI_MUX", "UNK123"), av)
+
+        fuses += self.get_iob_fuses(bel.x, bel.y, bel.idx_str, av)
+        return fuses
+
+    #==============================
+    #========== Iologic
+    #==============================
+    def get_out_iologic_attrs(self, bel: IologicBelDesc) -> list[AttrVal]:
+        """ OUT iologic attrs """
+        attr_vals = []
+        cell_attrs = bel.cell.attrs
+        cell_parms = bel.cell.parms
+        fclk = bel.fclk
+
+        if fclk != 'UNKNOWN':
+            attr_vals.append(AttrVal('WRFCLKSEL', 'UNK102'))
+        if fclk == 'SPINE10':
+            attr_vals.append(AttrVal('FCLKSEL0', 'HCLK0'))
+            attr_vals.append(AttrVal('FCLKSEL1', 'HCLK0'))
+            attr_vals.append(AttrVal('FCLKSEL2', 'HCLK0_'))
+            attr_vals.append(AttrVal('FCLKSEL3', 'HCLK0'))
+        elif fclk == 'SPINE11':
+            attr_vals.append(AttrVal('FCLKSEL0', 'HCLK1'))
+            attr_vals.append(AttrVal('FCLKSEL1', 'HCLK1'))
+            attr_vals.append(AttrVal('FCLKSEL2', 'HCLK1_'))
+            attr_vals.append(AttrVal('FCLKSEL4', 'HCLK1'))
+        elif fclk == 'SPINE12':
+            attr_vals.append(AttrVal('FCLKSEL0', 'HCLK2'))
+            attr_vals.append(AttrVal('FCLKSEL1', 'HCLK2'))
+            attr_vals.append(AttrVal('FCLKSEL2', 'HCLK2_'))
+            attr_vals.append(AttrVal('FCLKSEL3', 'HCLK2'))
+        elif fclk == 'SPINE13':
+            attr_vals.append(AttrVal('FCLKSEL0', 'HCLK3'))
+            attr_vals.append(AttrVal('FCLKSEL1', 'HCLK3'))
+            attr_vals.append(AttrVal('FCLKSEL2', 'HCLK3_'))
+            attr_vals.append(AttrVal('FCLKSEL4', 'HCLK3'))
+
+        cell_outmode = cell_parms['OUTMODE']
+        attr_vals.append(AttrVal('LSRIMUX_0', '0'))
+        if cell_outmode in {'ODDRX1', 'ODDRX2', 'ODDRX4'}:
+            attr_vals.append(AttrVal('CLKOMUX', 'ENABLE'))
+            attr_vals.append(AttrVal('OCLKCE', 'CE'))
+            attr_vals.append(AttrVal('LSROMUX_0', '0'))
+            attr_vals.append(AttrVal('OUTMODE', cell_outmode))
+        elif cell_outmode in {'MODDRX1', 'MODDRX2', 'MODDRX4'}: # OSER*_MEM
+            attr_vals.append(AttrVal('CLKOMUX', 'ENABLE'))
+            attr_vals.append(AttrVal('OCLKCE', 'CE'))
+            attr_vals.append(AttrVal('LSROMUX_0', '0'))
+            attr_vals.append(AttrVal('OUTMODE', cell_outmode))
+            attr_vals.append(AttrVal('WRFCLKSEL', str(cell_parms.get('TCLK_SOURCE', 'DQSW')).strip('"')))
+        elif cell_outmode in {'ODDRX5'}: # main cell
+            attr_vals.append(AttrVal('HWL', 'TRUE'))
+            attr_vals.append(AttrVal('CLKOMUX', 'ENABLE'))
+            attr_vals.append(AttrVal('CLKOMUX_CLK', 'SIG'))
+            attr_vals.append(AttrVal('LSROMUX_0', 'UNKNOWN'))
+            attr_vals.append(AttrVal('OCLKCE', 'CE'))
+            attr_vals.append(AttrVal('OUTMODE', cell_outmode))
+        elif cell_outmode in {'DDRENABLE'}: # aux cell
+            if bel.main_cell_outmode == 'VIDEOTX':
+                attr_vals.append(AttrVal('OUTMODE', 'LVDSOUT'))
+                attr_vals.append(AttrVal('CLKOMUX', 'ENABLE'))
+                attr_vals.append(AttrVal('OCLKCE', 'CE'))
+                attr_vals.append(AttrVal('LSROMUX_0', '0'))
+            else:
+                attr_vals.append(AttrVal('OUTMODE', 'UNKNOWN'))
+                attr_vals.append(AttrVal('CLKOMUX', 'ENABLE'))
+                attr_vals.append(AttrVal('CLKOMUX_CLK', 'SIG'))
+                attr_vals.append(AttrVal('LSROMUX_0', 'UNKNOWN'))
+                attr_vals.append(AttrVal('OUTCLK', 'ENABLE'))
+                attr_vals.append(AttrVal('OCLKCE', 'CE'))
+        elif cell_outmode == 'VIDEOTX':
+            attr_vals.append(AttrVal('OUTMODE', 'LVDSOUT'))
+            attr_vals.append(AttrVal('CLKOMUX', 'ENABLE'))
+            attr_vals.append(AttrVal('LSROMUX_0', '0'))
+            attr_vals.append(AttrVal('OCLKCE', 'CE'))
+
+        return attr_vals
+
+    def get_in_iologic_attrs(self, bel: IologicBelDesc) -> list[AttrVal]:
+        """ IN iologic attrs """
+        attr_vals = []
+        cell_attrs = bel.cell.attrs
+        cell_parms = bel.cell.parms
+        fclk = bel.fclk
+
+        if bel.main_cell_inmode == 'DDRENABLE':
+            return []
+        if fclk == 'SPINE10':
+            attr_vals.append(AttrVal('FCLKSEL5', 'HCLK0'))
+            attr_vals.append(AttrVal('FCLKSEL6', 'HCLK0'))
+            attr_vals.append(AttrVal('FCLKSEL7', 'HCLK0_'))
+            attr_vals.append(AttrVal('FCLKSEL3', 'HCLK0'))
+        elif fclk == 'SPINE11':
+            attr_vals.append(AttrVal('FCLKSEL5', 'HCLK1'))
+            attr_vals.append(AttrVal('FCLKSEL6', 'HCLK1'))
+            attr_vals.append(AttrVal('FCLKSEL7', 'HCLK1_'))
+            attr_vals.append(AttrVal('FCLKSEL4', 'HCLK1'))
+        elif fclk == 'SPINE12':
+            attr_vals.append(AttrVal('FCLKSEL5', 'HCLK2'))
+            attr_vals.append(AttrVal('FCLKSEL6', 'HCLK2'))
+            attr_vals.append(AttrVal('FCLKSEL7', 'HCLK2_'))
+            attr_vals.append(AttrVal('FCLKSEL3', 'HCLK2'))
+        elif fclk == 'SPINE13':
+            attr_vals.append(AttrVal('FCLKSEL5', 'HCLK3'))
+            attr_vals.append(AttrVal('FCLKSEL6', 'HCLK3'))
+            attr_vals.append(AttrVal('FCLKSEL7', 'HCLK3_'))
+            attr_vals.append(AttrVal('FCLKSEL4', 'HCLK3'))
+
+        attr_vals.append(AttrVal('LSRMUX_LSR', 'SIG'))
+        attr_vals.append(AttrVal('LSRIMUX_0', '0'))
+        attr_vals.append(AttrVal('LSROMUX_0', '0'))
+        cell_inmode = cell_parms['INMODE']
+        if cell_inmode in {'IDDRX1', 'IDDRX2', 'IDDRX4', 'IDDRX5'}:
+            attr_vals.append(AttrVal('INMODE', cell_inmode))
+            attr_vals.append(AttrVal('CLKIMUX', 'ENABLE'))
+        elif cell_inmode in {'MIDDRX1', 'MIDDRX2', 'MIDDRX4'}: # IDES*_MEM
+            attr_vals.append(AttrVal('INMODE', cell_inmode))
+            attr_vals.append(AttrVal('CLKIMUX', 'ENABLE'))
+            attr_vals.append(AttrVal('FIFO', 'ENABLE'))
+            attr_vals.append(AttrVal('IOLOGIC_UNKNOWN112', 'DQR90'))
+        elif cell_inmode == 'VIDEORX':
+            attr_vals.append(AttrVal('INMODE', 'LVDSIN'))
+            attr_vals.append(AttrVal('CLKIMUX', 'ENABLE'))
+        else:
+            attr_vals.append(AttrVal('INMODE', cell_inmode))
+        return attr_vals
+
+    def common_iologic_handler(self, bel: IologicBelDesc) -> list[AttrVal]:
+        attr_vals = []
+        cell_parms = bel.cell.parms
+
+        attr = 'TXCLK_POL'
+        val = str(int(cell_parms.get(attr, '0'), 2))
+        attr_vals.append(AttrVal(attr, val))
+
+        attr = 'HWL'
+        val = cell_parms.get(attr, 'FALSE')
+        if val != 'FALSE':
+            attr_vals.append(AttrVal(attr, val))
+
+        attr_vals.append(AttrVal('GSR', 'ENGSR'))
+        return attr_vals
+
+    #==============================
+    #========== Clocks
+    #==============================
+    def get_pll_freq_R(self) -> list[tuple[float, float]]:
+        return [(3.24, 72300), (4.79, 48900), (9.22, 25400), (17.09, 13700), (34.08, 6870), (68.05, 3440), (136.1, 1720), (270.95, 864)]
+
+    def get_permitted_pll_freqs(self) -> tuple[float, float, float, float, float]:
+        """ (max_in, max_out, min_out, max_vco, min_vco) """
+        return (800., 1600., 6.25, 1600., 800.)
+
+    def get_pll_coeffs(self, fvco: float) -> tuple[float, float]:
+        """ Returns constants for PLL calculation """
+        K1 = 120
+        if fvco >= 1400.0:
+            K1 = 240
+        C1 = 4.725e-11
+        return (K1, C1)
+
+    def get_DCS_fuses(self, bel: BelDesc) -> list[CellFuseBits]:
+        # DCSs without DCS_MODE are unused
+        if 'DCS_MODE' not in bel.cell.attrs:
+            return []
+        spine = self.chipdb.get_dcs_spine(bel.x, bel.y, bel.idx_int)
+
+        av = self.get_dcs_attrvals(bel, spine)
+        _, dcs_str = self.dcs_spine2quadrant_idx[spine]
+
+        fuses = []
+        for x, y in itertools.product(range(self.chipdb.cols), range(self.chipdb.rows)):
+            bits = self.chipdb.get_dcs_fuses(x, y, av, dcs_str)
+            if bits:
+                fuses.append(CellFuseBits(x, y, bits))
+        return fuses
+
+    def get_CLKDIV_fuses(self, bel: BelDesc) -> list[CellFuseBits]:
+        hclk_idx = bel.idx_str[-1]
+
+        av = set()
+        self.chipdb.get_hclk_attr_val(AttrVal(f"HCLKDIV{hclk_idx}_DIV", self.get_clkdiv_divmode(bel)), av)
+
+        fuses = []
+        bels_x_y = self.get_clkdiv_bels(bel)
+        for x_y in bels_x_y:
+            x, y = x_y
+            bits = self.chipdb.get_hclk_fuses(x, y, av)
+            if bits:
+                fuses.append(CellFuseBits(x, y, bits))
+        return fuses
+
+    def get_CLKDIV2_fuses(self, bel: BelDesc) -> list[CellFuseBits]:
+        return []
+
     #==============================
     #========== DSP
     #==============================
@@ -5843,6 +6109,236 @@ class GW5A(Device):
         """ DSP occupy several cells """
         for off in range(3):
             yield (bel.x + off, bel.y)
+
+    def common_dsp_handler(self, bel: BelDesc, attr_vals: list[AttrVal]) -> list[CellFuseBits]:
+        av =  set()
+        for attrval in attr_vals:
+            self.chipdb.get_dsp5_attr_val(attrval, av)
+
+        fuses = []
+        bels_x_y = self.get_dsp_bels(bel)
+        for x_y in bels_x_y:
+            x, y = x_y
+            bits = self.chipdb.get_dsp5_fuses(x, y, av)
+            if bits:
+                fuses.append(CellFuseBits(x, y, bits))
+        return fuses
+
+    def set_mult12x12_attrvals(self, bel: BelDesc, dsp_indices: DspIndices) -> list[AttrVal]:
+        """ 12x12 """
+        attr_vals = []
+        cell_parms = bel.cell.parms
+        cell_attrs = bel.cell.attrs
+
+        pair_idx = dsp_indices.pair_idx
+        idx = dsp_indices.idx
+        is_even = dsp_indices.is_even
+
+        # The working theory is that the second multiplier needs to be shifted to the left by 24 bits, and perhaps this pair determines that.
+        attr_vals.append(AttrVal('UNK_192', 'UNK_23'))
+        attr_vals.append(AttrVal('CE0_MUX', 'CE0_IN'))
+        attr_vals.append(AttrVal('CE1_MUX', 'CE1_IN'))
+        if idx:
+            attr_vals.append(AttrVal('MULT12_1_EN', 'TRUE'))
+        else:
+            attr_vals.append(AttrVal('MULT12X12_EN', 'TRUE'))
+            attr_vals.append(AttrVal('ALU_OP0_MUX', 'MULT0'))  # connect the first multiplier as operand 0 ALU — it will be placed in the lower bits of the result.
+
+        for parm in ['AREG_CLK', 'BREG_CLK', 'PREG_CLK']:
+            val = cell_parms.get(parm, 'BYPASS')
+            attr_vals.append(AttrVal(f'{parm[0]}{idx}{parm[1:]}', val))
+
+        for parm in ['AREG_CE', 'BREG_CE', 'PREG_CE']:
+            val = cell_parms.get(parm, 'CE0')
+            attr_vals.append(AttrVal(f'{parm[0]}{idx}{parm[1:]}', val))
+
+        for parm in ['AREG_RESET', 'BREG_RESET', 'PREG_RESET']:
+            val = cell_parms.get(parm, 'RESET0')
+            attr_vals.append(AttrVal(f'{parm[0]}{idx}{parm[1:]}', val))
+
+        if self.device_name not in {'GW5AST-138C'}:
+            for parm, default in [('OREG_CLK', 'BYPASS'), ('OREG_CE', 'CE0'), ('OREG_RESET', 'RESET0')]:
+                val = cell_parms.get(parm, default)
+                attr_vals.append(AttrVal(f'{parm[0]}{idx}{parm[1:]}', val))
+
+        attr = 'MULT_RESET_MODE'
+        val = cell_parms.get(attr, 'SYNC')
+        attr_vals.append(AttrVal(attr, val))
+
+        return attr_vals
+
+    def set_multaddalu12x12_attrvals(self, bel: BelDesc, dsp_indices: DspIndices) -> list[AttrVal]:
+        """ 12x12 """
+        attr_vals = []
+        cell_parms = bel.cell.parms
+        cell_attrs = bel.cell.attrs
+
+        pair_idx = dsp_indices.pair_idx
+        idx = dsp_indices.idx
+        is_even = dsp_indices.is_even
+
+        # The working theory is that the second multiplier needs to be shifted to the left by 24 bits, and perhaps this pair determines that.
+        attr_vals.append(AttrVal('UNK_192', 'UNK_23')) # see mult12x12
+        attr_vals.append(AttrVal('CE0_MUX', 'CE0_IN'))
+        attr_vals.append(AttrVal('CE1_MUX', 'CE1_IN'))
+        attr_vals.append(AttrVal('MULT12_1_EN', 'TRUE'))
+        attr_vals.append(AttrVal('MULT12X12_EN', 'TRUE'))
+        attr_vals.append(AttrVal('ALU_OP0_MUX', 'MULT0'))
+        attr_vals.append(AttrVal('ALU', 'ENABLE'))
+        attr_vals.append(AttrVal('UNK_CLK_191', 'CLK0')) # XXX find out whose clock this is
+
+        if "USE_CASCADE_OUT" in cell_attrs:
+            attr_vals.append(AttrVal('CASO', 'ENABLE'))
+
+        if self.device_name not in {'GW5AST-138C'}:
+            for parm in [('OREG_CLK', 'BYPASS'), ('OREG_CE', 'CE0'), ('OREG_RESET', 'RESET0')]:
+                attr, default = parm
+                attr_vals.append(AttrVal(f'{attr[0]}0{attr[1:]}', cell_parms.get(attr, default)))
+                attr_vals.append(AttrVal(f'{attr[0]}1{attr[1:]}', cell_parms.get(attr, default)))
+
+        attr = 'DYN_CASI_SEL'
+        val = cell_parms.get(attr, 'FALSE')
+        attr_vals.append(AttrVal(attr, val))
+        if val == 'TRUE':
+            # XXX It seems that this input requires inversion.
+            attr_vals.append(AttrVal('CASISEL_PAD', 'INV'))
+
+        for parm in [('PREG0_CLK', 'BYPASS'), ('PREG0_CE', 'CE0'), ('PREG0_RESET', 'RESET0'),
+                     ('PREG1_CLK', 'BYPASS'), ('PREG1_CE', 'CE0'), ('PREG1_RESET', 'RESET0')]:
+            attr, default = parm
+            attr_vals.append(AttrVal(f'P{attr[4]}REG{attr[5:]}', cell_parms.get(attr, default)))
+
+        for parm in [('ACCSEL_IREG_CLK', 'BYPASS'), ('ACCSEL_IREG_CE', 'CE0'), ('ACCSEL_IREG_RESET', 'RESET0'),
+                     ('ACCSEL_PREG_CLK', 'BYPASS'), ('ACCSEL_PREG_CE', 'CE0'), ('ACCSEL_PREG_RESET', 'RESET0')]:
+            attr, default = parm
+            val = cell_parms.get(attr, default)
+            attr_vals.append(AttrVal(f'ACCSEL_0{attr[6:]}', val))
+            attr_vals.append(AttrVal(f'ACCSEL_1{attr[6:]}', val))
+
+        attr = 'PRE_LOAD'
+        val = cell_parms.get(attr, 0)
+        pre_load = str(val)
+        if len(pre_load) > 58:
+            pre_load = pre_load[-48:]
+        else:
+            pre_load = pre_load.rjust(48, '0')
+        for bitnum, pre_loadbit in enumerate(pre_load[::-1]):
+            attr_vals.append(AttrVal(f'PRELOAD_BIT_{bitnum}', pre_loadbit))
+
+        for parm in self.multaddalu12x12_defaults:
+            attr, default = parm
+            attr_vals.append(AttrVal(attr, cell_parms.get(attr, default)))
+
+        return attr_vals
+
+    def set_multalu27x18_attrvals(self, bel: BelDesc, dsp_indices: DspIndices) -> list[AttrVal]:
+        """ 27x18 """
+        attr_vals = []
+        cell_parms = bel.cell.parms
+        cell_attrs = bel.cell.attrs
+
+        pair_idx = dsp_indices.pair_idx
+        idx = dsp_indices.idx
+        is_even = dsp_indices.is_even
+
+        # The working theory is that the second multiplier needs to be shifted to the left by 24 bits, and perhaps this pair determines that.
+        attr_vals.append(AttrVal('UNK_192', 'UNK_23')) # see mult12x12
+        attr_vals.append(AttrVal('CE0_MUX', 'CE0_IN'))
+        attr_vals.append(AttrVal('CE1_MUX', 'CE1_IN'))
+        attr_vals.append(AttrVal('ALU_OP0_MUX', 'MULT0'))
+        attr_vals.append(AttrVal('ALU', 'ENABLE'))
+        attr_vals.append(AttrVal('UNK_CLK_191', 'CLK0')) # XXX find out whose clock this is
+
+        if "MULT27X36_MAIN" in cell_attrs:
+            attr_vals.append(AttrVal('MULT27X36', 'ENABLE'))
+        elif "MULT27X36_AUX" in cell_attrs:
+            attr_vals.append(AttrVal('CASI_SEL', 1))
+        else:
+            attr = 'CASI_SEL'
+            val = int(cell_parms.get(attr, '0'), 2)
+            attr_vals.append(AttrVal(attr, val))
+
+        if "USE_CASCADE_OUT" in cell_attrs:
+            attr_vals.append(AttrVal('CASO', 'ENABLE'))
+
+        if self.device_name not in {'GW5AST-138C'}:
+            for parm in [('OREG_CLK', 'BYPASS'), ('OREG_CE', 'CE0'), ('OREG_RESET', 'RESET0')]:
+                attr, default = parm
+                attr_vals.append(AttrVal(f'{attr[0]}0{attr[1:]}', cell_parms.get(attr, default)))
+                attr_vals.append(AttrVal(f'{attr[0]}1{attr[1:]}', cell_parms.get(attr, default)))
+
+        attr = 'DYN_CASI_SEL'
+        val = cell_parms.get(attr, 'FALSE')
+        attr_vals.append(AttrVal(attr, val))
+        if val == 'TRUE':
+            # XXX It seems that this input requires inversion.
+            attr_vals.append(AttrVal('CASISEL_PAD', 'INV'))
+
+        for parm in ['AREG_CLK', 'BREG_CLK']:
+            val = cell_parms.get(parm, 'BYPASS')
+            attr_vals.append(AttrVal(f'{parm[0]}{idx}{parm[1:]}', val))
+
+        for parm in ['AREG_CE', 'BREG_CE']:
+            val = cell_parms.get(parm, 'CE0')
+            attr_vals.append(AttrVal(f'{parm[0]}{idx}{parm[1:]}', val))
+
+        for parm in ['AREG_RESET', 'BREG_RESET']:
+            val = cell_parms.get(parm, 'RESET0')
+            attr_vals.append(AttrVal(f'{parm[0]}{idx}{parm[1:]}', val))
+
+        for parm in [('DREG_CLK', 'BYPASS'), ('DREG_CE', 'CE0'), ('DREG_RESET', 'RESET0')]:
+            attr, default = parm
+            attr_vals.append(AttrVal(f'A1{attr[1:]}', cell_parms.get(attr, default)))
+            attr_vals.append(AttrVal(f'B1{attr[1:]}', cell_parms.get(attr, default)))
+
+        for parm in [('PREG_CLK', 'BYPASS'), ('PREG_CE', 'CE0'), ('PREG_RESET', 'RESET0')]:
+            attr, default = parm
+            attr_vals.append(AttrVal(f'P0{attr[1:]}', cell_parms.get(attr, default)))
+
+        for parm in [('ACCSEL_IREG_CLK', 'BYPASS'), ('ACCSEL_IREG_CE', 'CE0'), ('ACCSEL_IREG_RESET', 'RESET0'),
+                     ('ACCSEL_PREG_CLK', 'BYPASS'), ('ACCSEL_PREG_CE', 'CE0'), ('ACCSEL_PREG_RESET', 'RESET0')]:
+            attr, default = parm
+            val = cell_parms.get(attr, default)
+            attr_vals.append(AttrVal(f'ACCSEL_0{attr[6:]}', val))
+            attr_vals.append(AttrVal(f'ACCSEL_1{attr[6:]}', val))
+
+        attr = 'PRE_LOAD'
+        val = cell_parms.get(attr, 0)
+        pre_load = str(val)
+        if len(pre_load) > 58:
+            pre_load = pre_load[-48:]
+        else:
+            pre_load = pre_load.rjust(48, '0')
+        for bitnum, pre_loadbit in enumerate(pre_load[::-1]):
+            attr_vals.append(AttrVal(f'PRELOAD_BIT_{bitnum}', pre_loadbit))
+
+        for parm in self.multalu27x18_defaults:
+            attr, default = parm
+            attr_vals.append(AttrVal(attr, cell_parms.get(attr, default)))
+
+        return attr_vals
+
+
+    def get_MULT12X12_fuses(self, bel: BelDesc) -> list[CellFuseBits]:
+        """ 12x12 """
+        dsp_indices = self.decode_dsp_indices(bel)
+        attr_vals = self.set_mult12x12_attrvals(bel, dsp_indices)
+
+        return self.common_dsp_handler(bel, attr_vals)
+
+    def get_MULTADDALU12X12_fuses(self, bel: BelDesc) -> list[CellFuseBits]:
+        """ 12x12 """
+        dsp_indices = self.decode_dsp_indices(bel)
+        attr_vals = self.set_multaddalu12x12_attrvals(bel, dsp_indices)
+
+        return self.common_dsp_handler(bel, attr_vals)
+
+    def get_MULTALU27X18_fuses(self, bel: BelDesc) -> list[CellFuseBits]:
+        """ 27x18 and 27x36 """
+        dsp_indices = self.decode_dsp_indices(bel)
+        attr_vals = self.set_multalu27x18_attrvals(bel, dsp_indices)
+
+        return self.common_dsp_handler(bel, attr_vals)
 
     # debug
     def __repr__(self):
@@ -6936,9 +7432,20 @@ class GW5AT_60B(GW5A):
 ################################################################
 class GW5AST_138C(GW5A):
     """ GW5AST-138C chip. Tangmega138k board """
+    # DDRDLL attribute set as the vendor IDE writes it (constant over 19 bitstreams)
+    ddrdll_attrs = [('ADJ0', 4), ('DLL_UNK14', 7), ('DLL_UNK20', 1), ('DLL_UNK22', 15),
+                    ('DLL_UNK23', 8), ('DLL_UNK27', 20)]
+
     def __init__(self, cli_args: CliArgs, pnr: Netlist):
         super().__init__(cli_args, pnr)
         self.used_clock_spines = set()
+        # IO_TYPE codes the vendor IDE emits on this chip (impl/fuzz/iotype_map.json): SSTL15 -> 158,
+        # SSTL15D -> 165. The generic 'SSTL'/'SSTL_D' codes have no logicinfo entry on the 138C.
+        self.io_type_alias = {frozenset({'SSTL15'}): 'SSTL15_5A',
+                              frozenset({'SSTL15D'}): 'SSTL15D_5A',
+                              frozenset({'LVPECL33E'}): 'LVPECL_E',
+                              frozenset({'LVPECL33'}): 'LVPECL_E',
+                              **self.io_type_alias}
         # find the clock bridge tiles
         self.clock_bridge_ttypes = range(80, 86)
         self.clock_bridge_xy = set()
@@ -6959,7 +7466,7 @@ class GW5AST_138C(GW5A):
         return self.chipdb.get_spine_enable_fuses(x, y, spine_enable_table)
 
     def is_clock_pip(self, tiledata: Tile, src: str, dest: str) -> bool:
-        if src[8:].startswith('_BOT') or src[8:].startswith('_TOP'):
+        if src[8:].startswith('_BOT') or src[8:].startswith('_TOP') or src.endswith(('_BOT', '_TOP')):
             return True
         if src not in wnames.clknumbers:
             return False
@@ -7007,8 +7514,312 @@ class GW5AST_138C(GW5A):
         return fuses
 
     #==============================
+    #========== Clocks
+    #==============================
+    # Deviations from the generic GW5A PLL attribute set, measured on 83 vendor bitstreams
+    # (sbp-computational impl/fuzz/fuzz_report.json, tools/fuzz_all_fs.sh):
+    #  - KVCO is 7 with PLL_UNK211=2 for VCO >= 650 MHz (current gw_sh, sbp-computational
+    #    impl/fuzz/pll_vco: VCO 650..1600 all KVCO 7/UNK211 2; legal VCO 650..1300 per gw_sh PA2078);
+    #    older-IDE samples at VCO 500/650 had KVCO 2 without UNK211;
+    #  - FLDCOUNT has no VCO>1400 bump (VCO 1500 at 50 MHz input -> 32);
+    #  - ODIVn_SEL is absent for disabled outputs n >= 1.
+    # ICP_SEL and LPF_RES_SEL from the generic pump formula matched every static-ICP sample.
+    def get_pll_kvco(self, fvco: float) -> tuple[int, bool]:
+        """ (KVCO, set PLL_UNK211=2) """
+        if fvco < 650.0:
+            return (2, False)
+        return (7, True)
+
+    def _discard_pll_attr(self, av: set[int], attr: str, nvals: int):
+        li = self.chipdb.db.logicinfo['PLL']
+        aid = attrids.pll_attrids[attr]
+        for v in range(nvals):
+            av.discard(li.get((aid, v)))
+
+    def get_pll_attrvals(self, bel: BelDesc) -> set[int]:
+        av = super().get_pll_attrvals(bel)
+        cell_parms = bel.cell.parms
+        fclkin = float(cell_parms.get('A_FCLKIN', '100.00'))
+        idiv = int(cell_parms.get('A_IDIV_SEL', '1'), 2)
+        fbdiv = int(cell_parms.get('A_FBDIV_SEL', '1'), 2)
+        mdiv = int(cell_parms.get('A_MDIV_SEL', bin(8)), 2)
+        fref = fclkin / idiv
+        fvco = fref * fbdiv * mdiv
+        kvco, unk211 = self.get_pll_kvco(fvco)
+        self._discard_pll_attr(av, 'KVCO', 16)
+        self.chipdb.get_pll_attr_val(AttrVal('KVCO', kvco), av)
+        if unk211:
+            self.chipdb.get_pll_attr_val(AttrVal('PLL_UNK211', 2), av)
+        fclkin_idx, _, _ = self.get_pll_pump(fref, fvco)
+        self._discard_pll_attr(av, 'FLDCOUNT', 256)
+        self.chipdb.get_pll_attr_val(AttrVal('FLDCOUNT', fclkin_idx), av)
+        for i in range(1, 7):
+            if cell_parms.get(f'A_CLKOUT{i}_EN', 'FALSE') != 'TRUE':
+                self._discard_pll_attr(av, f'A_ODIV{i}_SEL', 128)
+        return av
+
+    #==============================
+    #========== Iologic (measured on vendor DDR3 PHY and USB2 soft-PHY bitstreams, impl/fuzz)
+    #==============================
+    # FCLKSEL values by HCLK slot k (the HCLK_MUX_ALPHA<block><k> serving the pad = bel.fclk SPINE10+k),
+    # measured with gw_sh over all 6 HCLK blocks (impl/fuzz/fclksel/fclksel_table.tsv, A pads decoded).
+    _FCLKSEL_OUT = {
+        0: (('FCLKSEL0', 'HCLK0'), ('FCLKSEL1', 'HCLK2'), ('FCLKSEL2', 'HCLK2_'), ('FCLKSEL3', 'HCLK0_')),
+        1: (('FCLKSEL0', 'HCLK3'), ('FCLKSEL4', 'HCLK1_')),
+        2: (('FCLKSEL1', 'HCLK2'), ('FCLKSEL2', 'HCLK2_')),
+        3: (('FCLKSEL0', 'HCLK3'),),
+    }
+    _FCLKSEL_IN = {
+        0: (('FCLKSEL3', 'HCLK0_'), ('FCLKSEL5', 'HCLK0')),
+        1: (('FCLKSEL4', 'HCLK1_'), ('FCLKSEL5', 'HCLK3'), ('FCLKSEL6', 'HCLK3'), ('FCLKSEL7', 'HCLK3_')),
+        2: (),
+        3: (('FCLKSEL5', 'HCLK3'), ('FCLKSEL6', 'HCLK3'), ('FCLKSEL7', 'HCLK3_')),
+    }
+
+    def iologic_fclksel(self, bel: IologicBelDesc, out: bool) -> list[AttrVal]:
+        if bel.fclk not in {'SPINE10', 'SPINE11', 'SPINE12', 'SPINE13'}:
+            return []
+        table = self._FCLKSEL_OUT if out else self._FCLKSEL_IN
+        return [AttrVal(a, v) for a, v in table[int(bel.fclk[-1])]]
+
+    def iologic_paired_in_fclksel(self, bel: IologicBelDesc) -> list[AttrVal]:
+        """ Input FCLKSELs for an IDES paired with this output cell, minus those the output list sets. """
+        k = int(bel.fclk[-1]) if bel.fclk in {'SPINE10', 'SPINE11', 'SPINE12', 'SPINE13'} else 0
+        have = {a for a, _ in self._FCLKSEL_OUT[k]} if bel.fclk in {'SPINE10', 'SPINE11', 'SPINE12', 'SPINE13'} else set()
+        return [AttrVal(a, v) for a, v in self._FCLKSEL_IN[k] if a not in have]
+
+    def get_out_iologic_attrs(self, bel: IologicBelDesc) -> list[AttrVal]:
+        cell_parms = bel.cell.parms
+        outmode = cell_parms['OUTMODE']
+        av = [AttrVal('IOLOGIC_UNKNOWN91', 78), AttrVal('CLKOMUX', 'ENABLE')] + self.iologic_fclksel(bel, True)
+        if outmode in {'MODDRX1', 'MODDRX2', 'MODDRX4'}:          # OSER8_MEM
+            av.append(AttrVal('OUTMODE', outmode))
+            av.append(AttrVal('WRFCLKSEL', str(cell_parms.get('TCLK_SOURCE', 'UNK102')).strip('"')))
+            if bel.main_cell_inmode in {'MIDDRX1', 'MIDDRX2', 'MIDDRX4'}:   # paired with IDES8_MEM (DQ pins)
+                av += [AttrVal('INMODE', bel.main_cell_inmode), AttrVal('CLKIMUX', 'ENABLE'), AttrVal('FIFO', 'ENABLE'),
+                       AttrVal('IOLOGIC_UNKNOWN118', 1005), AttrVal('UD2', 118)] + self.iologic_paired_in_fclksel(bel)
+            else:
+                av.append(AttrVal('LSRIMUX_0', '0'))
+        elif outmode == 'ODDRX8':                                  # OSER16 main cell
+            av += [AttrVal('OUTMODE', 'ODDRX8'), AttrVal('HWL', 'TRUE'), AttrVal('WRFCLKSEL', 'UNK102')]
+            if bel.main_cell_inmode == 'IDDRX8':                   # paired with IDES16
+                av += [AttrVal('INMODE', 'UNK105'), AttrVal('CLKIMUX', 'ENABLE')] + self.iologic_paired_in_fclksel(bel)
+        elif outmode == 'DDRENABLE16':                             # OSER16 aux cell
+            av += [AttrVal('OUTMODE', 'LVDSOUT'), AttrVal('ISI', 'ENABLE'), AttrVal('OCLKCE', 'CE'),
+                   AttrVal('LSRIMUX_0', '0'), AttrVal('WRFCLKSEL', 'UNK102')]
+        else:
+            return super().get_out_iologic_attrs(bel)
+        return av
+
+    def get_in_iologic_attrs(self, bel: IologicBelDesc) -> list[AttrVal]:
+        cell_parms = bel.cell.parms
+        inmode = cell_parms['INMODE']
+        av = [AttrVal('IOLOGIC_UNKNOWN91', 78), AttrVal('CLKIMUX', 'ENABLE')] + self.iologic_fclksel(bel, False)
+        if inmode == 'IDDRX4' and bel.cell.typ == 'IDES8':         # USB2 soft PHY receiver
+            av += [AttrVal('INMODE', 'UNK76'), AttrVal('LSRIMUX_0', '0'), AttrVal('LSROMUX_0', '0')]
+        elif inmode == 'IDDRX8':                                   # IDES16 main cell
+            av += [AttrVal('INMODE', 'UNK105'), AttrVal('HWL', 'TRUE')]
+        elif inmode in {'MIDDRX1', 'MIDDRX2', 'MIDDRX4'}:          # IDES8_MEM
+            av += [AttrVal('INMODE', inmode), AttrVal('FIFO', 'ENABLE'), AttrVal('IOLOGIC_UNKNOWN118', 1005), AttrVal('UD2', 118)]
+        elif inmode == 'DDRENABLE16':                              # IDES16 aux cell: fuses come from the OSER16 aux
+            return []
+        else:
+            return super().get_in_iologic_attrs(bel)
+        return av
+
+    def common_iologic_handler(self, bel: IologicBelDesc) -> list[AttrVal]:
+        """ The vendor sets no TXCLK_POL/GSR rows on this chip. """
+        return []
+
+    def iologic_partner_cell(self, bel: IologicBelDesc) -> CellDesc | None:
+        """ The OSER*_MEM (IOLOGIC<idx>O) and IDES*_MEM (IOLOGIC<idx>I) of a bidirectional DQ pad are
+        separate cells; return the one sharing this site. """
+        if not hasattr(self, '_iologic_by_bel'):
+            cells = self.pnr.in_file['modules'][self.pnr.top_module_name]['cells']
+            self._iologic_by_bel = {c['attributes'].get('NEXTPNR_BEL'): n for n, c in cells.items()
+                                    if c['attributes'].get('NEXTPNR_BEL', '').find('/IOLOGIC') > 0}
+        own = bel.cell.attrs.get('NEXTPNR_BEL', '')
+        if own[-1:] not in ('I', 'O'):
+            return None
+        name = self._iologic_by_bel.get(own[:-1] + ('O' if own[-1] == 'I' else 'I'))
+        return self.pnr.get_cell(name) if name else None
+
+    def set_iologic_bel_fclk(self, bel: IologicBelDesc) -> IologicBelDesc:
+        bel = super().set_iologic_bel_fclk(bel)
+        partner = self.iologic_partner_cell(bel)
+        if partner is None:
+            return bel
+        outmode = bel.main_cell_outmode or partner.parms.get('OUTMODE')
+        inmode = bel.main_cell_inmode or partner.parms.get('INMODE')
+        return IologicBelDesc(bel.x, bel.y, bel.idx_str, bel.cell, bel.fclk, outmode, inmode)
+
+    def get_merged_iodelay_fuses(self, bel: IologicBelDesc) -> list[CellFuseBits]:
+        """ C_STATIC_DLY of an IODELAY merged into the IOLOGIC (attrs IODELAY). The fuzzed tables
+        exist only at the 48 bottom-edge sites (ttyp 247); other sites emit nothing. """
+        if not bel.cell.attrs.get('IODELAY') or 'C_STATIC_DLY' not in bel.cell.parms:
+            return []
+        x, y = bel.x, bel.y
+        off = self.chipdb.get_iob_fuse_cell_offset(x, y, bel.idx_str)
+        # B pads keep their bits in the offset tile; the own tile then belongs to the A pad.
+        cands = ((x + off[1], y + off[0]), (x, y)) if off else ((x, y),)
+        for cx, cy in cands:
+            if 'IODELAY' in self.chipdb.db.extra_func.get((cy, cx), {}).get('fuzzed_attrs', {}):
+                dly = CellDesc(bel.cell.name, 'IODELAY', {'C_STATIC_DLY': bel.cell.parms['C_STATIC_DLY']},
+                               bel.cell.attrs, bel.cell.connections)
+                bits = self.get_fuzzed_attr_fuses(BelDesc(cx, cy, bel.idx_str, dly))
+                return [CellFuseBits(cx, cy, bits)] if bits else []
+        return []
+
+    def get_IOLOGICI_EMPTY_fuses(self, bel: BelDesc) -> list[CellFuseBits]:
+        return super().get_IOLOGICI_EMPTY_fuses(bel) + self.get_merged_iodelay_fuses(self.make_IologicBelDesc(bel))
+
+    def get_IOLOGICO_EMPTY_fuses(self, bel: BelDesc) -> list[CellFuseBits]:
+        return super().get_IOLOGICO_EMPTY_fuses(bel) + self.get_merged_iodelay_fuses(self.make_IologicBelDesc(bel))
+
+    def get_IOLOGIC_DUMMY_fuses(self, bel: BelDesc) -> list[CellFuseBits]:
+        """ When OSER16 and IDES16 share a bidirectional pad, iologic_partner_cell sets both
+        main_cell_outmode and main_cell_inmode on each IOLOGIC_DUMMY; dispatch on the cell's own parms. """
+        iol_bel = self.make_IologicBelDesc(bel)
+        iol_bel = self.set_iologic_bel_fclk(iol_bel)
+        attr_vals = self.common_iologic_handler(iol_bel)
+        if 'OUTMODE' in iol_bel.cell.parms:
+            attr_vals += self.get_out_iologic_attrs(iol_bel)
+        else:
+            attr_vals += self.get_in_iologic_attrs(iol_bel)
+        av = self.set_iologic_attrvals(iol_bel, attr_vals)
+        return self.get_iologic_cell_fuses(iol_bel.x, iol_bel.y, iol_bel.idx_str, av)
+
+    def get_IOLOGIC_fuses(self, bel: BelDesc) -> list[CellFuseBits]:
+        """ OSER16/IDES16 """
+        mod_bel = self.make_IologicBelDesc(bel)
+        if 'OUTMODE' in bel.cell.parms:
+            return self.common_out_iologic_handler(mod_bel)
+        else:
+            return self.common_in_iologic_handler(mod_bel)
+
+    def common_in_iologic_handler(self, bel: IologicBelDesc) -> list[CellFuseBits]:
+        return super().common_in_iologic_handler(bel) + self.get_merged_iodelay_fuses(self.make_IologicBelDesc(bel))
+
+    def set_iologic_attrvals(self, bel: IologicBelDesc, attr_vals: list[AttrVal]) -> set[int]:
+        """ Like GW5A but accepts raw integer values for attributes without named values. """
+        av = set()
+        for attr_val in attr_vals:
+            if isinstance(attr_val.val, int):
+                add_attr_val(self.chipdb.db, 'IOLOGIC', av, attrids.iologic_attrids[attr_val.attr], attr_val.val)
+            else:
+                self.chipdb.get_iologic_attr_val(attr_val, av)
+        return av
+
+    #==============================
+    #========== Transplant
+    #==============================
+    def get_transplant_fuses(self) -> list[CellFuseBits]:
+        """ Raw vendor tile bits (--transplant) for blocks without attribute tables (DQS, DDR IOLOGIC routing). """
+        fuses = []
+        for path in self.cli_args.args.transplant:
+            with open(path) as f:
+                tiles = json.load(f)
+            for key, ent in tiles.items():
+                row, col = (int(v) for v in key.split(','))
+                ttyp = self.chipdb.get_ttyp(col, row)
+                if ent.get('ttyp', ttyp) != ttyp:
+                    raise Exception(f"transplant {path}: tile ({row},{col}) ttyp {ent['ttyp']} != chipdb {ttyp}")
+                fuses.append(CellFuseBits(col, row, {(r, c) for r, c in ent['bits']}))
+            print(f'transplant: {len(tiles)} tiles from {path}')
+        return fuses
+
+    def get_work_in_progress_fuses(self) -> list[CellFuseBits]:
+        return super().get_work_in_progress_fuses() + self.get_transplant_fuses()
+
+    #==============================
+    #========== Fuzzed hard cells (DQS, DDRDLL, IODELAY): param -> bits from chipdb extra_func['fuzzed_attrs']
+    #==============================
+    def get_fuzzed_attr_fuses(self, bel: BelDesc, site: Coord | None = None) -> set[Coord]:
+        """ Bits for the cell parameters that differ from the vendor default. The chipdb stores
+        'ATTR=VAL' -> bits for single-valued params and 'ATTR' -> per-bit list for bit vectors
+        (C_STATIC_DLY, LSB first). Defaults have no entry and set no bits. 'site' overrides the
+        (row, col) tile holding the table (default: the bel's own tile). """
+        ef = self.chipdb.db.extra_func.get(site or (bel.y, bel.x), {})
+        table = ef.get('fuzzed_attrs', {}).get(bel.cell.typ)
+        if table is None:
+            raise Exception(f"X{bel.x}Y{bel.y} has no fuzzed {bel.cell.typ} site; {bel.cell.name} cannot be placed here")
+        bits = set()
+        for attr, val in bel.cell.parms.items():
+            sval = str(val).strip().strip('"')
+            key = f'{attr}={sval}'
+            if key in table:
+                bits |= {(b[0], b[1]) for b in table[key]}
+            elif attr in table and set(sval) <= {'0', '1'}:
+                for i, ch in enumerate(reversed(sval)):
+                    if ch == '1' and i < len(table[attr]):
+                        bits.add(tuple(table[attr][i][:2]))
+        return bits
+
+    def get_DQS_fuses(self, bel: BelDesc) -> list[CellFuseBits]:
+        """ DQS has no static fuses beyond its parameters (DQS_MODE/HWL/FIFO_MODE_SEL); the DDR3 X4
+        defaults set none. Clocking and control are routed by nextpnr. """
+        bits = self.get_fuzzed_attr_fuses(bel)
+        return [CellFuseBits(bel.x, bel.y, bits)] if bits else []
+
+    def get_IODELAY_fuses(self, bel: BelDesc) -> list[CellFuseBits]:
+        bits = self.get_fuzzed_attr_fuses(bel)
+        return [CellFuseBits(bel.x, bel.y, bits)] if bits else []
+
+    def get_DDRDLL_fuses(self, bel: BelDesc) -> list[CellFuseBits]:
+        """ DDRDLL bel at (108,0): vendor attribute set via shortval['DLL0'] of that tile; the fuzzed
+        DIV_SEL/SCAL_EN/DLL_FORCE bits sit in the cfg tile (0,0). """
+        li = self.chipdb.db.logicinfo['DLLDLY']
+        av = set()
+        for attr, val in self.ddrdll_attrs:
+            feat = li.get((attrids.dlldly_attrids[attr], val))
+            if feat is not None:
+                av.add(feat)
+        ttyp = self.chipdb.get_ttyp(bel.x, bel.y)
+        if 'DLL0' not in self.chipdb.db.shortval.get(ttyp, {}):
+            raise Exception(f"X{bel.x}Y{bel.y} has no DLL0 table; DDRDLL {bel.cell.name} cannot be placed here")
+        fuses = []
+        bits = get_shortval_fuses(self.chipdb.db, ttyp, av, 'DLL0')
+        if bits:
+            fuses.append(CellFuseBits(bel.x, bel.y, bits))
+        cfg_bits = self.get_fuzzed_attr_fuses(bel, (0, 0))
+        if cfg_bits:
+            fuses.append(CellFuseBits(0, 0, cfg_bits))
+        return fuses
+
+    def get_PLL_fuses(self, bel: BelDesc) -> list[CellFuseBits]:
+        """ The 138C PLL config lives in the shortval['PLL'] tables of the head tile and
+        its companions (3 tiles on L/R, 4 on the bottom edge). """
+        mod_bel = self.rename_plla_attrs(bel)
+        av = self.get_pll_attrvals(mod_bel)
+        tiles = self.chipdb.db.extra_func[bel.y, bel.x]['bpll']['tiles']
+        fuses = []
+        for trow, tcol in tiles:
+            bits = self.chipdb.get_pll_fuses(tcol, trow, av)
+            if bits:
+                fuses.append(CellFuseBits(tcol, trow, bits))
+        return fuses
+
+    def get_CLKDIV_fuses(self, bel: BelDesc) -> list[CellFuseBits]:
+        ef = self.chipdb.db.extra_func.get((bel.y, bel.x), {})
+        cd_bels = ef.get('clkdiv', {}).get('bels', {})
+        idx = int(bel.idx_str[-1]) if bel.idx_str and bel.idx_str[-1].isdigit() else -1
+        cd_bel = cd_bels.get(idx, {})
+        if idx >= 0:
+            # Vendor-decoded HCLKDIV<slot>_DIV codes (2->13, 3.5->14, 4->15, 5->16, 8->23, impl/fuzz/hclk)
+            # come from the HCLK shortval table of the control tile, not from the old row-21 one-hot table.
+            av = set()
+            self.chipdb.get_hclk_attr_val(AttrVal(f"HCLKDIV{idx}_DIV", self.get_clkdiv_divmode(bel)), av)
+            bits = self.chipdb.get_hclk_fuses(bel.x, bel.y, av)
+            return [CellFuseBits(bel.x, bel.y, bits)] if bits else []
+        return super().get_CLKDIV_fuses(bel)
+
+    #==============================
     #========== Misc
     #==============================
+    def get_GTR12_QUAD_fuses(self, bel: BelDesc) -> list[CellFuseBits]:
+        """ GTR12_QUAD has no main-grid fuses; UPAR CSR commands are baked via --serdes_csr. """
+        return []
+
     def get_BUFG_fuses(self, bel: BelDesc) -> list[CellFuseBits]:
         """ Logic -> clock gate """
         return []
@@ -7223,6 +8034,33 @@ class Bitstream_GW5AST_138C(Bitstream_GW5A):
     """ Output bitstream for GW5AST-138C """
     def __init__(self, cli_args: CliArgs, device: Device):
         super().__init__(cli_args, device)
+        self.serdes_csr = cli_args.args.serdes_csr
+
+    def insert_serdes_csr(self, csr_path: str):
+        writes = []
+        with open(csr_path) as f:
+            for line in f:
+                m = re.match(r'\s*upar_write_driver\(0x([0-9a-fA-F]+)\s*,\s*0x([0-9a-fA-F]+)\)', line)
+                if m:
+                    writes.append((int(m.group(1), 16), int(m.group(2), 16)))
+        if not writes:
+            raise Exception(f"serdes csr: no upar_write_driver entries found in {csr_path}")
+        pos = None
+        for i, e in enumerate(self.header):
+            if e[:1] == b'\xd2':
+                pos = i + 1
+                break
+        if pos is None:
+            raise Exception("serdes csr: 0xD2 command not found in bitstream header")
+        block = [bytearray.fromhex('36000000ffffffffffffffff')]
+        for addr, data in writes:
+            block.append(bytearray.fromhex(f'{0x3E << 56 | data:016x}{0x39 << 56 | addr:016x}'))
+        self.header[pos:pos] = block
+
+    def fill_header_footer(self, bs):
+        super().fill_header_footer(bs)
+        if self.serdes_csr:
+            self.insert_serdes_csr(self.serdes_csr)
 
     def write_with_bsram(self, main_map):
         extra_slots = self.device.get_extra_slots()

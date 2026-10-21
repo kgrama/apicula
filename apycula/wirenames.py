@@ -888,7 +888,11 @@ clknames_5ast138c.update({
     101: 'BRPLL0CLK0', 102: 'BRPLL0CLK1', 103: 'BRPLL0CLK2', 104: 'BRPLL0CLK3',
 })
 
-clknames_5ast138c.update({n: f"UNK{n}" for n in range(105, 131)})
+clknames_5ast138c.update({
+    105: 'HCLKBRG0', 106: 'HCLKBRG1', 107: 'HCLKBRG2', 108: 'HCLKBRG3',
+    109: 'HCLKBRG4', 110: 'HCLKBRG5', 111: 'HCLKBRG6', 112: 'HCLKBRG7',
+})
+clknames_5ast138c.update({n: f"UNK{n}" for n in range(113, 131)})
 
 # These are the external clock pins, two on each side
 clknames_5ast138c.update({
@@ -907,7 +911,12 @@ clknames_5ast138c.update({
 
 #clknames_5ast138c[153] = 'VCC'
 
-clknames_5ast138c.update({n: f"UNK{n}" for n in range(163, 237)})
+clknames_5ast138c.update({n: f"UNK{n}" for n in range(163, 220)})
+clknames_5ast138c.update({
+    220: 'HCLKBRG8', 221: 'HCLKBRG9', 222: 'HCLKBRGA', 223: 'HCLKBRGB',
+    224: 'HCLKBRGC', 225: 'HCLKBRGD', 226: 'HCLKBRGE', 227: 'HCLKBRGF',
+})
+clknames_5ast138c.update({n: f"UNK{n}" for n in range(228, 237)})
 
 clknames_5ast138c.update({
     237: 'CBRIDGEOUT_TOP0', 238: 'CBRIDGEOUT_TOP1', 239: 'CBRIDGEOUT_TOP2', 240: 'CBRIDGEOUT_TOP3',
@@ -985,6 +994,25 @@ hclknames_5ast138c.update({n: f"HCLK_GCLK0{i}" for i, n in enumerate(range(123, 
 hclknames_5ast138c.update({n: f"HCLK_GCLK1{i}" for i, n in enumerate(range(310, 318))})
 hclknames_5ast138c.update({n: f"HCLK_GCLK2{i}" for i, n in enumerate(range(497, 505))})
 hclknames_5ast138c.update({n: f"HCLK_GCLK3{i}" for i, n in enumerate(range(684, 692))})
+
+# The GW5AST-138C has 6 HCLK regions (left/right edges split at row 54, bottom
+# split at col 91; no top-edge HCLK). The intra-region wire roles are identical
+# to GW5A-25A (verified by decoding active table-48 pips in gw_sh bitstreams:
+# e.g. the FCLK path L2HCLK00 -> HCLK_MUX_BETA00 -> HCLK_BUF_BI00 /
+# HCLK_BUF_BO00 -> HCLK_MUX_ALPHA00), so transplant the 25A region-0 names to
+# all 6 regions at offsets of 187. This masks clk-namespace aliases (LWSPINE
+# etc., ids 1000-1048) in the HCLK namespace only - their consumers use
+# clknames, not hclknames.
+hclknames_5ast138c.update({n: f"HCLK_UNK{n}" for n in range(701, 6 * 187)})
+for _k in range(4, 6):
+    hclknames_5ast138c[_k * 187] = 'VSS'
+    hclknames_5ast138c[_k * 187 + 1] = 'VCC'
+for _i in range(2, 187):
+    _name = hclknames_5a25a.get(_i)
+    if not isinstance(_name, str) or 'UNK' in _name:
+        continue
+    for _k in range(6):
+        hclknames_5ast138c[_k * 187 + _i] = f'{_name[:-2]}{_k}{_name[-1]}'
 
 hclknumbers_5ast138c = {v: k for k, v in hclknames_5ast138c.items()}
 

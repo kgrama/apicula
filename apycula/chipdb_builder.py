@@ -446,9 +446,12 @@ def main():
 
     pad_locs = pindef.get_pll_pads_locs(params['device'], params['package'])
     chipdb.pll_pads(db, device, pad_locs)
+    chipdb.fill_bottom_pll_pads(db, device)
 
     chipdb.dat_portmap(dat, db, device)
     chipdb.add_hclk_bels(dat, db, device)
+    chipdb.fse_wire_delays(db, params['device'])
+    chipdb.sync_extra_func(db)
 
 
     # XXX GW1NR-9 has interesting IOBA pins on the bottom side

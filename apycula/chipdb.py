@@ -11,6 +11,7 @@ import apycula.fse_parser as fuse
 from apycula import wirenames as wnames
 from apycula import pindef
 from apycula import bitmatrix
+from apycula import gw5ast_lr_pll
 
 # the character that marks the I/O attributes that come from the nextpnr
 mode_attr_sep = '&'
@@ -318,6 +319,17 @@ def set_corners_io(db, device):
 
 # This is clock bridge in GW5AST-138C
 bridge_tile_types_138 = {80, 81, 82, 83, 84, 85}
+# GW5AST-138C HCLK -> Center Clock Bridge input wires (clknames ids), measured clean-room
+# across all 24 CLKDIV sites (6 HCLK regions x 4 slots) via gw_sh bitstream diffs.
+_gw5ast_hclk_bridge_wires = {
+    0: [109, 110, 107, 108],  # HCLK0 (27, 0)   LEFTSIDE[0..3]
+    1: [105, 106, 220, 221],  # HCLK1 (81, 0)   LEFTSIDE[4..7]
+    2: [111, 112, 105, 106],  # HCLK2 (27, 181) RIGHTSIDE[0..3]
+    3: [111, 112, 226, 227],  # HCLK3 (81, 181) RIGHTSIDE[4..7]
+    4: [107, 108, 222, 223],  # HCLK4 (108, 64) BOTTOMSIDE[0..3]
+    5: [109, 110, 224, 225],  # HCLK5 (108,117) BOTTOMSIDE[4..7]
+}
+_gw5ast_hclk_bridge_srcids = {w for ws in _gw5ast_hclk_bridge_wires.values() for w in ws}
 
 # XXX GW1N-4 and GW1NS-4 have next data in dat.portmap['CmuxIns']:
 # 62 [11, 1, 126]
@@ -449,12 +461,14 @@ def fse_clock_pips_138(fse, ttyp, device):
                 # XXX skip 6 and 7 for now
                 if srcid in range(wnames.clknumbers['P16A'], wnames.clknumbers['P47D'] + 1):
                     continue
-                # XXX skip longwires
+                # XXX skip longwires (except HCLK->bridge clock inputs in bridge cells)
                 if srcid in range(164, 237):
-                    continue
-                # XXX ignore unknown wires
+                    if not (ttyp in bridge_tile_types_138 and srcid in _gw5ast_hclk_bridge_srcids):
+                        continue
+                # XXX ignore unknown wires (except HCLK->bridge clock inputs in bridge cells)
                 if srcid in range(105, 129):
-                    continue
+                    if not (ttyp in bridge_tile_types_138 and srcid in _gw5ast_hclk_bridge_srcids):
+                        continue
                 if srcid in range(253, 269):
                     continue
 
@@ -473,8 +487,8 @@ def fse_clock_pips_138(fse, ttyp, device):
                         if not src.startswith('CBRIDGEOUT') or not is_allowed_spine_input(src, dest):
                             continue
                     else:
-                        # bridge spines may get signal from logic->gates and these gates must have suffix
-                        if srcid not in range(139, 163):
+                        # bridge spines may get signal from logic->gates or HCLK->bridge wires and must have suffix
+                        if srcid not in range(139, 163) and srcid not in _gw5ast_hclk_bridge_srcids:
                             continue
                         src = mk_clock_wname(device, src, half)
 
@@ -491,11 +505,14 @@ def fse_clock_pips_138(fse, ttyp, device):
             # XXX skip 6 and 7 for now
             if srcid in range(wnames.clknumbers['P16A'], wnames.clknumbers['P47D'] + 1):
                 continue
-            # XXX skip longwires
-            if srcid in range(164, 237):
+            # HCLK->bridge clock inputs (measured: ddr_pico tiles_all.json, gw_sh
+            # CLKDIV_4_LEFTSIDE_{1,2,3} bits at (54,93)) live in table 38 too
+            hclk_brg = ttyp in bridge_tile_types_138 and srcid in _gw5ast_hclk_bridge_srcids
+            # XXX skip longwires (except HCLK->bridge clock inputs in bridge cells)
+            if srcid in range(164, 237) and not hclk_brg:
                 continue
-            # XXX ignore unknown wires
-            if srcid in range(105, 129):
+            # XXX ignore unknown wires (except HCLK->bridge clock inputs in bridge cells)
+            if srcid in range(105, 129) and not hclk_brg:
                 continue
             if srcid in range(253, 269):
                 continue
@@ -503,6 +520,11 @@ def fse_clock_pips_138(fse, ttyp, device):
             # 277 as source is VCC
             if srcid == 277:
                 src = 'VCC'
+            if hclk_brg and dest.startswith('SPINE'):
+                # bridge spines take the TOP and BOT copies of the HCLK->bridge wire
+                for half in range(2):
+                    pips.setdefault(dest, {})[mk_clock_wname(device, src, half)] = fuses
+                continue
             pips.setdefault(dest, {})[src] = fuses
     return pips
 
@@ -1165,6 +1187,16 @@ def gw5_hclk_idx(dev, device, row, col):
         if col == 0:
             return 2
         return 3
+    if device == 'GW5AST-138C':
+        # 6 regions, no top-edge HCLK. Boundaries measured by moving a single
+        # OSER8 along the edges and diffing gw_sh bitstreams: left/right edges
+        # split at row 54, bottom edge at col 91.
+        if row == dev.rows - 1:
+            return 4 if col < 91 else 5
+        if col == 0:
+            return 0 if row < 54 else 1
+        if col == dev.cols - 1:
+            return 2 if row < 54 else 3
     return -1
 
 # Table 48 describes the HCLK wire connections, but the problem is that it also
@@ -1176,7 +1208,7 @@ def gw5_hclk_wire_offset(device):
     return {'GW5A-25A': 187, 'GW5AST-138C': 187}[device]
 
 def gw5_ihclk_wire_num(device):
-    return {'GW5A-25A': 65}[device]
+    return {'GW5A-25A': 65, 'GW5AST-138C': 40}[device]
 
 def gw5_get_num_of_hclks(device):
     if device == 'GW5A-25A':
@@ -1194,11 +1226,20 @@ def gw5_create_hclk_iol_pip(dev, device, row, col):
             return row not in {10, 18}
         if col == dev.cols - 1:
             return row not in {2, 10, 27}
+    if device == 'GW5AST-138C':
+        # all edge IO cells except the 6 HCLK control and 5 bridge cells
+        if row == dev.rows - 1:
+            return col not in {0, 64, 117, 118, 181}
+        if col in {0, dev.cols - 1}:
+            return row not in {27, 63, 81}
     return False
 
 def gw5_logic_to_hclk_wires(device):
     if device == 'GW5A-25A':
         return {0: (0, 64), 1: (36, 27), 2: (1, 0), 3: (34, 91)}
+    if device == 'GW5AST-138C':
+        return {0: (27, 0), 1: (81, 0), 2: (27, 181), 3: (81, 181),
+                4: (108, 64), 5: (108, 117)}
     return {}
 
 def make_hclk_pip(dev, hclk_idx, row, col, src, dest, fuses = set()):
@@ -1228,8 +1269,24 @@ def gw5_make_hclk_pips(dev, device, fse, dat: Datfile):
             hclk_idx = gw5_hclk_idx(dev, device, row, col)
             if hclk_idx >= 0:
                 if 48 in fse[ttyp]['wire']:
+                    # GW5AST-138C per-HCLK-line enable fuse: gw_sh sets ONE extra fuse per HCLK
+                    # line in use, beyond the mux-chain pips.  Decoded from silicon-proven
+                    # bitstreams (openddr_ddr3only.fs: line 2 @ (27,0) fuse (3,5), line 0 @
+                    # (81,0) fuse (9,7); softphy_v0.fs: line 0 @ (81,181) fuse (9,128)) -- in
+                    # every case exactly the fuse of the table-48 entry (68+j) -> (64+j) for the
+                    # active line j, with the full active fuse set then 100%% explained.  Fold it
+                    # into the HCLK_MUX_BETA -> HCLK_BUF_BI pip (34+j -> 56+j), the line-specific
+                    # entry on the same path, so gowin_pack emits it whenever the line is routed.
+                    line_en_fuses = {}
+                    if device == 'GW5AST-138C':
+                        for srcid, destid, *fuses in fse[ttyp]['wire'][48]:
+                            if destid - srcid == -4 and srcid in range(68, 72):
+                                line_en_fuses[srcid - 68] = {fuse.fuse_lookup(fse, ttyp, f, device)
+                                                             for f in unpad(fuses)}
                     for srcid, destid, *fuses in fse[ttyp]['wire'][48]:
                         fuses = {fuse.fuse_lookup(fse, ttyp, f, device) for f in unpad(fuses)}
+                        if srcid in range(34, 38) and destid == srcid + 22 and (srcid - 34) in line_en_fuses:
+                            fuses = fuses | line_en_fuses[srcid - 34]
                         # HCLK wires
                         if srcid < hclk_off:
                             if srcid in range(104, 108): # CLKDIV outputs
@@ -1248,7 +1305,7 @@ def gw5_make_hclk_pips(dev, device, fse, dat: Datfile):
                                 src = wnames.hclknames[srcid + hclk_idx * hclk_off]
                                 dest = wnames.hclknames[destid + hclk_idx * hclk_off]
                                 mk_hclk_pip(hclk_idx, row, col, src, dest, fuses)
-                            elif srcid in range(hclk_off, hclk_off + 4 * ihclk_wire_num) and destid in range(hclk_off, hclk_off + 4 * ihclk_wire_num):
+                            elif device == 'GW5A-25A' and srcid in range(hclk_off, hclk_off + 4 * ihclk_wire_num) and destid in range(hclk_off, hclk_off + 4 * ihclk_wire_num):
                                 src = wnames.hclknames[srcid + 5 * hclk_off]
                                 dest = wnames.hclknames[destid + 5 * hclk_off]
                                 mk_hclk_pip('_IHCLK', row, col, src, dest, fuses)
@@ -1278,7 +1335,7 @@ def gw5_make_hclk_pips(dev, device, fse, dat: Datfile):
     # XXX This section will need to be modified for the 138C—it has more HCLKs
     row = 0
     col = 0
-    for hclk_idx in range(4):
+    for hclk_idx in range(gw5_get_num_of_hclks(device)):
         for j in range(4):
             # make pip HCLKxy <- HCLK_MUX_ALPHAxy
             src = f'HCLK_MUX_ALPHA{hclk_idx}{j}'
@@ -1318,7 +1375,7 @@ def gw5_make_hclk_pips(dev, device, fse, dat: Datfile):
 
 
     # Epsilon defaults
-    for i in range(4):
+    for i in range(gw5_get_num_of_hclks(device)):
         mk_hclk_pip(i, row, col, f'HCLK_MUX_EPSILON{i}0', f'HCLK_BUF_AI{i}0')
         mk_hclk_pip(i, row, col, f'HCLK_MUX_EPSILON{i}2', f'HCLK_BUF_AI{i}1')
         mk_hclk_pip(i, row, col, f'HCLK_MUX_EPSILON{i}4', f'HCLK_BUF_AI{i}2')
@@ -1490,7 +1547,16 @@ def gw5_make_hclk_to_clk_gates(dev, device, fse, dat: Datfile):
 # The GW5A series has a different CLKDIV/CLKDIV2 configuration—each of the four
 # wires in a single HCLK block has its own dedicated CLKDIV/CLKDIV2. The inputs
 # for CLKDIV2 are HCLK_BUF_BO.
-_gw5a_hclk_locs = { 'GW5A-25A': { 0: (0, 64), 1: (36, 27), 2: (1, 0), 3: (34, 91)} }
+_gw5a_hclk_locs = {
+    'GW5A-25A': { 0: (0, 64), 1: (36, 27), 2: (1, 0), 3: (34, 91)},
+    # GW5AST-138C: the 6 HCLK control cells (same as gw5_logic_to_hclk_wires).
+    'GW5AST-138C': { 0: (27, 0), 1: (81, 0), 2: (27, 181), 3: (81, 181),
+                     4: (108, 64), 5: (108, 117)},
+}
+# CLKDIV DIV_MODE config fuses (GW5AST-138C), measured clean-room via gw_sh
+# oracle bitstream diffs (serdes_fuzz_artifacts/clkdiv_138c/): one-hot bits in
+# the HCLK control tile's local row 21.  DIV_MODE string -> column.
+_gw5ast_clkdiv_divmode_cols = {'2': 51, '3': 49, '3.5': 13, '4': 12, '5': 47, '8': 10}
 def gw5_add_hclk_bels(dat, dev, device):
     for hclk_idx, hclk_loc in _gw5a_hclk_locs[device].items():
         row, col = hclk_loc
@@ -1503,9 +1569,9 @@ def gw5_add_hclk_bels(dat, dev, device):
             # CLKDIV2
             dev.hclk_div2.setdefault(hclk_idx, set()).add((row, col, i))
             clkdiv2 = extra_clkdiv2.setdefault('bels', {}).setdefault(i, {})
-            # XXX not creating Bels — in this case, the creation of the CLKDIV
-            # mechanism for pre-5A chips in nextpnr will not be triggered
-            #dev[row, col].bels[f'CLKDIV2{i}'] = Bel()
+            # Create the Bel so nextpnr's CLKDIV mechanism triggers.  (Was
+            # commented out while only the wire graph existed.)
+            dev[row, col].bels[f'CLKDIV2{i}'] = Bel()
             portmap = clkdiv2.setdefault('inputs', {})
             portmap['RESETN'] = f'B{i + 2}'  # GW5A-25A 0-B2, 1-B3, 2-B4, 3-B5
             portmap['HCLKIN'] = f'CLKDIV2_HCLKIN{hclk_idx}{i}'
@@ -1525,16 +1591,58 @@ def gw5_add_hclk_bels(dat, dev, device):
 
             # CLKDIV
             clkdiv = extra_clkdiv.setdefault('bels', {}).setdefault(i, {})
+            dev[row, col].bels[f'CLKDIV{i}'] = Bel()
             portmap = clkdiv.setdefault('inputs', {})
-            portmap['HCLKIN'] = f'CLKDIV_I{hclk_idx}{i}'
-            portmap['RESETN'] = f'C{i + 4}'  # GW5A-25A 0-C4, 1-C5, 2-C6, 3-C7
-            portmap['CALIB']  = ['B6', 'B7', 'C0', 'C1'][i]  # GW5A-25A
-            make_hclk_pip(dev, hclk_idx, row, col, f'HCLK_MUX_ALPHA{hclk_idx}{i}', portmap['HCLKIN'])
+            if device == 'GW5AST-138C':
+                # 138C: the CLKDIV bel sits ON the real HCLK_BUF_BI/BO wires
+                # (decoded from the gw_sh oracle: L2HCLK -> HCLK_MUX_BETA ->
+                # HCLK_BUF_BI -> [clkdiv] -> HCLK_BUF_BO -> HCLK_MUX_ALPHA ->
+                # distribution).  Use those names so the bel pins land on wires
+                # the existing table-48 pips actually connect.
+                portmap['HCLKIN'] = f'HCLK_BUF_BI{hclk_idx}{i}'
+                portmap['RESETN'] = f'C{i + 4}'
+                portmap['CALIB']  = ['B6', 'B7', 'C0', 'C1'][i]
+                # input mux feeds HCLK_BUF_BI (HCLK_MUX_BETA -> BI is in table 48)
+                add_node(dev, f'HCLK{hclk_idx}_HCLK_BUF_BI{hclk_idx}{i}',
+                         "GLOBAL_CLK", row, col, portmap['HCLKIN'])
+                portmap = clkdiv.setdefault('outputs', {})
+                portmap['CLKOUT'] = f'CLKDIV_O{hclk_idx}{i}'
+                dev.wire_delay[portmap['CLKOUT']] = 'X0'
+                # Route CLKOUT (HCLK wire type so globals.cc src_is_outpin is true)
+                # into HCLK_BUF_BO{hclk_idx}{i}, which connects via table 48 to
+                # HCLK_MUX_ALPHA{hclk_idx}{i} in the HCLK control tile.
+                dev.hclk_pips.setdefault((row, col), {}).setdefault(
+                    f'HCLK_BUF_BO{hclk_idx}{i}', {}).update({portmap['CLKOUT']: set()})
+                add_node(dev, f'HCLK{hclk_idx}_HCLK_BUF_BO{hclk_idx}{i}',
+                         "GLOBAL_CLK", row, col, f'HCLK_BUF_BO{hclk_idx}{i}')
+                # Connect CLKDIV_O{hclk_idx}{i} and HCLK_BUF_BO{hclk_idx}{i} directly
+                # into the Center Clock Bridge global clock input wires (TOP and BOT halves)
+                # so CLKDIV outputs reach the global clock spine network without colliding
+                # with undivided FCLK paths that share HCLK_BUF_BI/BO.
+                bo_wire = f'HCLK_BUF_BO{hclk_idx}{i}'
+                brg_srcid = _gw5ast_hclk_bridge_wires[hclk_idx][i]
+                brg_base = wnames.clknames[brg_srcid]
+                for half in range(2):
+                    brg_wname = mk_clock_wname(device, brg_base, half)
+                    dev.hclk_pips.setdefault((row, col), {}).setdefault(
+                        brg_wname, {}).update({portmap['CLKOUT']: set(), bo_wire: set()})
+                    add_node(dev, brg_wname, "GLOBAL_CLK", row, col, brg_wname)
+            else:
+                portmap['HCLKIN'] = f'CLKDIV_I{hclk_idx}{i}'
+                portmap['RESETN'] = f'C{i + 4}'  # GW5A-25A 0-C4, 1-C5, 2-C6, 3-C7
+                portmap['CALIB']  = ['B6', 'B7', 'C0', 'C1'][i]  # GW5A-25A
+                make_hclk_pip(dev, hclk_idx, row, col, f'HCLK_MUX_ALPHA{hclk_idx}{i}', portmap['HCLKIN'])
+                portmap = clkdiv.setdefault('outputs', {})
+                portmap['CLKOUT'] = f'CLKDIV_O{hclk_idx}{i}'
+                src = portmap['CLKOUT']
+                add_node(dev, f'HCLK{hclk_idx}_{src}', "GLOBAL_CLK", row, col, src)
 
-            portmap = clkdiv.setdefault('outputs', {})
-            portmap['CLKOUT'] = f'CLKDIV_O{hclk_idx}{i}'
-            src = portmap['CLKOUT']
-            add_node(dev, f'HCLK{hclk_idx}_{src}', "GLOBAL_CLK", row, col, src)
+            # DIV_MODE config fuses (GW5AST-138C, clean-room measured): one-hot
+            # column in the control tile's local row 21.  Stored per DIV_MODE so
+            # gowin_pack emits the right bit for the placed CLKDIV.
+            if device == 'GW5AST-138C':
+                clkdiv['divmode_fuses'] = {
+                    dm: {(21, c)} for dm, c in _gw5ast_clkdiv_divmode_cols.items()}
 
     return
 
@@ -1919,7 +2027,7 @@ def _iter_edge_coords(dev):
 
 def add_hclk_bels(dat, dev, device):
     #Stub for parts that don't have HCLK bel support yet
-    if device in {'GW5A-25A'}:
+    if device in {'GW5A-25A', 'GW5AST-138C'}:
         gw5_add_hclk_bels(dat, dev, device)
         return
     if device not in ("GW2A-18", "GW2A-18C", "GW1N-9", "GW1N-9C", "GW1N-1", "GW1NZ-1", "GW1NS-4", "GW1N-4"):
@@ -2030,9 +2138,12 @@ def add_hclk_bels(dat, dev, device):
 _global_wire_prefixes = {'PCLK', 'TBDHCLK', 'BBDHCLK', 'RBDHCLK', 'LBDHCLK',
                          'TLPLL', 'TRPLL', 'BLPLL', 'BRPLL'}
 def fse_create_hclk_nodes(dev, device, fse, dat: Datfile):
-    if device in {'GW5A-25A'}:
-        gw5_make_pin_to_hclk(dev)
-        gw5_make_hclk_to_clk_gates(dev, device, fse, dat)
+    if device in {'GW5A-25A', 'GW5AST-138C'}:
+        if device == 'GW5A-25A':
+            # pin/GCLK-gate entries are 25A-specific; on the 138C the FCLK
+            # enters each region via the L2HCLK aliases at the control cells
+            gw5_make_pin_to_hclk(dev)
+            gw5_make_hclk_to_clk_gates(dev, device, fse, dat)
         gw5_make_hclk_pips(dev, device, fse, dat)
         return
 
@@ -2194,8 +2305,374 @@ def fse_create_adc(dev, device, fse, dat):
 # but equal heights, with no geometric organization but with unique numbers.
 # A slot with a specific number is responsible for a fixed primitive—for
 # example, slot 6 is the left PLL, slot 8 is the lower PLL.
+# GW5AST-138C GTR12_QUAD high-speed transceiver. Port->wire map comes from the .dat
+# Gtrl12{Quad,Pmac,Upar}DB{Ins,Outs} tables (dat_parser, re-enabled). Each table row is
+# (wire_idx, dlt_row, dlt_col) relative to the quad anchor tile. The transceiver CONFIG is
+# NOT tile fuses — it is the CSR command block baked by gowin_pack --serdes_csr. So this only
+# models the fabric PORT WIRES so nextpnr can route the PCS<->GTR serdes_* interface.
+#
+# Anchor tiles (the 2 quads' head tiles) are NOT yet silicon-pinned — gowin_unpack surfaces
+# no fabric fuses for a placed GTR (config is CSR), so the absolute (row,col) must come from a
+# placement oracle. Left as a TODO list; the wire-map + node-building below are anchor-relative
+# and correct once the anchors are filled in.
+# Two GTR quads, head tile per quad. The 8 SerDes lane tiles are ttyp 278..285 at row 0
+# cols 27/45/63/81 (quad0) and 99/117/135/153 (quad1), Δ18. Quad head = first lane; the
+# q0-vs-q1 oracle diff (gtr_q0/q1.fs) localizes the per-quad config to these top-edge tiles,
+# and the .dat UparDBIns deltas validate 57/58 as real CLB pips from these anchors.
+# Two GTR quads, head tile per quad (ttyp 278 / 282, both unique). Found via the q0-vs-q1 oracle
+# diff + .dat delta validation. Bel pins stay inside these unique tiles (Option A above), so no
+# tile-type-dedup clash.
+_GTR_QUAD_ANCHORS = [(0, 27), (0, 99)]
+
+# --- GTR12_QUAD bel pin model -------------------------------------------------
+#
+# The prim_sim.v GTR12_QUAD has TWO distinct port sets (confirmed against the vendor
+# post-synth netlist hdl/usb3-review/02_jesd204b_gtr12_proof-u.vg):
+#   1. FABRIC_* / LANE* / LN* named ports (816 input + 632 output bits) = the FUNCTIONAL
+#      user interface.  A real synthesized design (and yosys, treating the prim as a
+#      blackbox) connects user logic to THESE.  The bel MUST expose them or no real GTR
+#      cell can bind.
+#   2. INET_Q0_Q1[92] / INET_Q_PMAC[532] / INET_Q_TEST[228] / INET_Q_UPAR[421] inout
+#      buses (1273 bits) = the physical hardwire mesh taps.  In a real design these are
+#      LEFT DANGLING (each net appears exactly twice: decl + the one GTR port); only the
+#      vendor's GTR-aware router bridges FABRIC_* <-> INET_* internally.
+#
+# The .dat Gtrl12*DB{Ins,Outs} tables decode ~590 INET bits -> real fabric wires.  There is
+# NO FABRIC_* -> INET_* map in the simlib (prim_tsim body is pure timing arcs; prim_sim body
+# is empty), so the full FABRIC_* -> fabric-wire functional routing is NOT recoverable from
+# the current RE artifacts -- that is the remaining gap to ECP5-DCU parity (see below).
+#
+# What we model here, end to end correct:
+#   - EVERY prim_sim port is exposed as a bel pin (per bit) on a unique in-tile wire, so any
+#     real GTR12_QUAD instantiation binds.  Unconnected pins are fine: the bel is GLOBAL and
+#     config rides the CSR (gowin_pack --serdes_csr), exactly as in the vendor oracle.
+#   - A small set of the INET bits with REAL .dat taps additionally get routable cross-tile
+#     himbaechel nodes (the PLL alias pattern, fse_create_slot_plls) so an open-flow test can
+#     drive/observe verified fabric wires.  Capped (_GTR_MAX_REAL_TAPS) per the minimal-tap
+#     decision; the dangling-vs-routed split mirrors silicon.
+#
+# (name, dir, width) from prim_sim.v GTR12_QUAD -- 258 port decls.
+_GTR_QUAD_PORTS = [
+    ('LN0_TXM_O','o',1),('LN0_TXP_O','o',1),('LN1_TXM_O','o',1),('LN1_TXP_O','o',1),
+    ('LN2_TXM_O','o',1),('LN2_TXP_O','o',1),('LN3_TXM_O','o',1),('LN3_TXP_O','o',1),
+    ('LN0_RXM_I','i',1),('LN0_RXP_I','i',1),('LN1_RXM_I','i',1),('LN1_RXP_I','i',1),
+    ('LN2_RXM_I','i',1),('LN2_RXP_I','i',1),('LN3_RXM_I','i',1),('LN3_RXP_I','i',1),
+    ('FABRIC_CLK_LIFE_DIV_I','i',2),('FABRIC_CM0_RXCLK_OE_L_I','i',1),
+    ('FABRIC_CM0_RXCLK_OE_R_I','i',1),('FABRIC_LN0_RXDET_RESULT','o',1),
+    ('FABRIC_LN1_RXDET_RESULT','o',1),('FABRIC_LN2_RXDET_RESULT','o',1),
+    ('FABRIC_LN3_RXDET_RESULT','o',1),('FABRIC_PMA_CM0_DR_REFCLK_DET_O','o',1),
+    ('FABRIC_PMA_CM1_DR_REFCLK_DET_O','o',1),('FABRIC_PMA_PD_REFHCLK_I','i',1),
+    ('FABRIC_REFCLK1_INPUT_SEL_I','i',3),('FABRIC_REFCLK_INPUT_SEL_I','i',3),
+    ('FABRIC_REFCLK_OE_L_I','i',1),('FABRIC_REFCLK_OE_R_I','i',1),
+    ('FABRIC_REFCLK_OUTPUT_SEL_I','i',5),('REFCLKM0_I','i',1),('REFCLKM1_I','i',1),
+    ('REFCLKP0_I','i',1),('REFCLKP1_I','i',1),('FABRIC_BURN_IN_I','i',1),
+    ('FABRIC_CK_SOC_DIV_I','i',2),('FABRIC_CLK_REF_CORE_I','i',1),
+    ('FABRIC_CM1_LIFE_CLK_O','o',1),('FABRIC_CM_LIFE_CLK_O','o',1),
+    ('FABRIC_CMU1_CK_REF_O','o',1),('FABRIC_CMU1_OK_O','o',1),
+    ('FABRIC_CMU1_REFCLK_GATE_ACK_O','o',1),('FABRIC_CMU1_REFCLK_GATE_I','i',1),
+    ('FABRIC_CMU_CK_REF_O','o',1),('FABRIC_CMU_OK_O','o',1),
+    ('FABRIC_CMU_REFCLK_GATE_ACK_O','o',1),('FABRIC_CMU_REFCLK_GATE_I','i',1),
+    ('FABRIC_GLUE_MAC_INIT_INFO_I','i',1),('FABRIC_LANE0_CMU_CK_REF_O','o',1),
+    ('FABRIC_LANE1_CMU_CK_REF_O','o',1),('FABRIC_LANE2_CMU_CK_REF_O','o',1),
+    ('FABRIC_LANE3_CMU_CK_REF_O','o',1),('FABRIC_LN0_ASTAT_O','o',6),
+    ('FABRIC_LN0_BURN_IN_TOGGLE_O','o',1),('FABRIC_LN0_CTRL_I','i',43),
+    ('FABRIC_LN0_IDDQ_I','i',1),('FABRIC_LN0_PD_I','i',3),('FABRIC_LN0_PMA_RX_LOCK_O','o',1),
+    ('FABRIC_LN0_RATE_I','i',2),('FABRIC_LN0_RSTN_I','i',1),('FABRIC_LN0_RXDATA_O','o',88),
+    ('FABRIC_LN0_STAT_O','o',13),('FABRIC_LN0_TXDATA_I','i',80),('FABRIC_LN1_ASTAT_O','o',6),
+    ('FABRIC_LN1_BURN_IN_TOGGLE_O','o',1),('FABRIC_LN1_CTRL_I','i',43),
+    ('FABRIC_LN1_IDDQ_I','i',1),('FABRIC_LN1_PD_I','i',3),('FABRIC_LN1_PMA_RX_LOCK_O','o',1),
+    ('FABRIC_LN1_RATE_I','i',2),('FABRIC_LN1_RSTN_I','i',1),('FABRIC_LN1_RXDATA_O','o',88),
+    ('FABRIC_LN1_STAT_O','o',13),('FABRIC_LN1_TXDATA_I','i',80),('FABRIC_LN2_ASTAT_O','o',6),
+    ('FABRIC_LN2_BURN_IN_TOGGLE_O','o',1),('FABRIC_LN2_CTRL_I','i',43),
+    ('FABRIC_LN2_IDDQ_I','i',1),('FABRIC_LN2_PD_I','i',3),('FABRIC_LN2_PMA_RX_LOCK_O','o',1),
+    ('FABRIC_LN2_RATE_I','i',2),('FABRIC_LN2_RSTN_I','i',1),('FABRIC_LN2_RXDATA_O','o',88),
+    ('FABRIC_LN2_STAT_O','o',13),('FABRIC_LN2_TXDATA_I','i',80),('FABRIC_LN3_ASTAT_O','o',6),
+    ('FABRIC_LN3_BURN_IN_TOGGLE_O','o',1),('FABRIC_LN3_CTRL_I','i',43),
+    ('FABRIC_LN3_IDDQ_I','i',1),('FABRIC_LN3_PD_I','i',3),('FABRIC_LN3_PMA_RX_LOCK_O','o',1),
+    ('FABRIC_LN3_RATE_I','i',2),('FABRIC_LN3_RSTN_I','i',1),('FABRIC_LN3_RXDATA_O','o',88),
+    ('FABRIC_LN3_STAT_O','o',13),('FABRIC_LN3_TXDATA_I','i',80),
+    ('FABRIC_REFCLK_GATE_ACK_O','o',1),('FABRIC_REFCLK_GATE_I','i',1),
+    ('LANE0_PCS_RX_RST','i',1),('LANE1_PCS_RX_RST','i',1),('LANE2_PCS_RX_RST','i',1),
+    ('LANE3_PCS_RX_RST','i',1),('LANE0_ALIGN_TRIGGER','i',1),('LANE1_ALIGN_TRIGGER','i',1),
+    ('LANE2_ALIGN_TRIGGER','i',1),('LANE3_ALIGN_TRIGGER','i',1),('LANE0_CHBOND_START','i',1),
+    ('LANE1_CHBOND_START','i',1),('LANE2_CHBOND_START','i',1),('LANE3_CHBOND_START','i',1),
+    ('LANE0_ALIGN_LINK','o',1),('LANE0_K_LOCK','o',1),('LANE0_DISP_ERR_O','o',2),
+    ('LANE0_DEC_ERR_O','o',2),('LANE0_CUR_DISP_O','o',2),('LANE1_ALIGN_LINK','o',1),
+    ('LANE1_K_LOCK','o',1),('LANE1_DISP_ERR_O','o',2),('LANE1_DEC_ERR_O','o',2),
+    ('LANE1_CUR_DISP_O','o',2),('LANE2_ALIGN_LINK','o',1),('LANE2_K_LOCK','o',1),
+    ('LANE2_DISP_ERR_O','o',2),('LANE2_DEC_ERR_O','o',2),('LANE2_CUR_DISP_O','o',2),
+    ('LANE3_ALIGN_LINK','o',1),('LANE3_K_LOCK','o',1),('LANE3_DISP_ERR_O','o',2),
+    ('LANE3_DEC_ERR_O','o',2),('LANE3_CUR_DISP_O','o',2),('LANE0_PCS_TX_RST','i',1),
+    ('LANE1_PCS_TX_RST','i',1),('LANE2_PCS_TX_RST','i',1),('LANE3_PCS_TX_RST','i',1),
+    ('LANE0_FABRIC_RX_CLK','i',1),('LANE1_FABRIC_RX_CLK','i',1),('LANE2_FABRIC_RX_CLK','i',1),
+    ('LANE3_FABRIC_RX_CLK','i',1),('LANE0_FABRIC_C2I_CLK','i',1),('LANE1_FABRIC_C2I_CLK','i',1),
+    ('LANE2_FABRIC_C2I_CLK','i',1),('LANE3_FABRIC_C2I_CLK','i',1),
+    ('LANE0_PCS_RX_O_FABRIC_CLK','o',1),('LANE1_PCS_RX_O_FABRIC_CLK','o',1),
+    ('LANE2_PCS_RX_O_FABRIC_CLK','o',1),('LANE3_PCS_RX_O_FABRIC_CLK','o',1),
+    ('LANE0_FABRIC_TX_CLK','i',1),('LANE1_FABRIC_TX_CLK','i',1),('LANE2_FABRIC_TX_CLK','i',1),
+    ('LANE3_FABRIC_TX_CLK','i',1),('LANE0_PCS_TX_O_FABRIC_CLK','o',1),
+    ('LANE1_PCS_TX_O_FABRIC_CLK','o',1),('LANE2_PCS_TX_O_FABRIC_CLK','o',1),
+    ('LANE3_PCS_TX_O_FABRIC_CLK','o',1),('FABRIC_CMU0_CLK','o',1),('FABRIC_CMU1_CLK','o',1),
+    ('FABRIC_QUAD_CLK_RX','o',1),('LANE0_RX_IF_FIFO_RDEN','i',1),
+    ('LANE1_RX_IF_FIFO_RDEN','i',1),('LANE2_RX_IF_FIFO_RDEN','i',1),
+    ('LANE3_RX_IF_FIFO_RDEN','i',1),('LANE0_RX_IF_FIFO_RDUSEWD','o',5),
+    ('LANE0_RX_IF_FIFO_AEMPTY','o',1),('LANE0_RX_IF_FIFO_EMPTY','o',1),
+    ('LANE1_RX_IF_FIFO_RDUSEWD','o',5),('LANE1_RX_IF_FIFO_AEMPTY','o',1),
+    ('LANE1_RX_IF_FIFO_EMPTY','o',1),('LANE2_RX_IF_FIFO_RDUSEWD','o',5),
+    ('LANE2_RX_IF_FIFO_AEMPTY','o',1),('LANE2_RX_IF_FIFO_EMPTY','o',1),
+    ('LANE3_RX_IF_FIFO_RDUSEWD','o',5),('LANE3_RX_IF_FIFO_AEMPTY','o',1),
+    ('LANE3_RX_IF_FIFO_EMPTY','o',1),('LANE0_TX_IF_FIFO_WRUSEWD','o',5),
+    ('LANE0_TX_IF_FIFO_AFULL','o',1),('LANE0_TX_IF_FIFO_FULL','o',1),
+    ('LANE1_TX_IF_FIFO_WRUSEWD','o',5),('LANE1_TX_IF_FIFO_AFULL','o',1),
+    ('LANE1_TX_IF_FIFO_FULL','o',1),('LANE2_TX_IF_FIFO_WRUSEWD','o',5),
+    ('LANE2_TX_IF_FIFO_AFULL','o',1),('LANE2_TX_IF_FIFO_FULL','o',1),
+    ('LANE3_TX_IF_FIFO_WRUSEWD','o',5),('LANE3_TX_IF_FIFO_AFULL','o',1),
+    ('LANE3_TX_IF_FIFO_FULL','o',1),('FABRIC_CMU0_RESETN_I','i',1),('FABRIC_CMU0_PD_I','i',1),
+    ('FABRIC_CMU0_IDDQ_I','i',1),('FABRIC_CMU1_RESETN_I','i',1),('FABRIC_CMU1_PD_I','i',1),
+    ('FABRIC_CMU1_IDDQ_I','i',1),('FABRIC_PLL_CDN_I','i',1),('FABRIC_LN0_CPLL_RESETN_I','i',1),
+    ('FABRIC_LN0_CPLL_PD_I','i',1),('FABRIC_LN0_CPLL_IDDQ_I','i',1),
+    ('FABRIC_LN1_CPLL_RESETN_I','i',1),('FABRIC_LN1_CPLL_PD_I','i',1),
+    ('FABRIC_LN1_CPLL_IDDQ_I','i',1),('FABRIC_LN2_CPLL_RESETN_I','i',1),
+    ('FABRIC_LN2_CPLL_PD_I','i',1),('FABRIC_LN2_CPLL_IDDQ_I','i',1),
+    ('FABRIC_LN3_CPLL_RESETN_I','i',1),('FABRIC_LN3_CPLL_PD_I','i',1),
+    ('FABRIC_LN3_CPLL_IDDQ_I','i',1),('FABRIC_CM1_PD_REFCLK_DET_I','i',1),
+    ('FABRIC_CM0_PD_REFCLK_DET_I','i',1),('FABRIC_CLK_MON_O','o',1),
+    ('FABRIC_GEARFIFO_ERR_RPT','o',1),('FABRIC_LN0_CTRL_I_H','i',43),
+    ('FABRIC_LN0_PD_I_H','i',3),('FABRIC_LN0_RATE_I_H','i',2),('FABRIC_LN0_RX_VLD_OUT','o',1),
+    ('FABRIC_LN0_RXELECIDLE_O','o',1),('FABRIC_LN0_RXELECIDLE_O_H','o',1),
+    ('FABRIC_LN0_STAT_O_H','o',13),('FABRIC_LN0_TX_VLD_IN','i',1),
+    ('FABRIC_LN1_CTRL_I_H','i',43),('FABRIC_LN1_PD_I_H','i',3),('FABRIC_LN1_RATE_I_H','i',2),
+    ('FABRIC_LN1_RX_VLD_OUT','o',1),('FABRIC_LN1_RXELECIDLE_O','o',1),
+    ('FABRIC_LN1_RXELECIDLE_O_H','o',1),('FABRIC_LN1_STAT_O_H','o',13),
+    ('FABRIC_LN1_TX_VLD_IN','i',1),('FABRIC_LN2_CTRL_I_H','i',43),('FABRIC_LN2_PD_I_H','i',3),
+    ('FABRIC_LN2_RATE_I_H','i',2),('FABRIC_LN2_RX_VLD_OUT','o',1),
+    ('FABRIC_LN2_RXELECIDLE_O','o',1),('FABRIC_LN2_RXELECIDLE_O_H','o',1),
+    ('FABRIC_LN2_STAT_O_H','o',13),('FABRIC_LN2_TX_VLD_IN','i',1),
+    ('FABRIC_LN3_CTRL_I_H','i',43),('FABRIC_LN3_PD_I_H','i',3),('FABRIC_LN3_RATE_I_H','i',2),
+    ('FABRIC_LN3_RX_VLD_OUT','o',1),('FABRIC_LN3_RXELECIDLE_O','o',1),
+    ('FABRIC_LN3_RXELECIDLE_O_H','o',1),('FABRIC_LN3_STAT_O_H','o',13),
+    ('FABRIC_LN3_TX_VLD_IN','i',1),('FABRIC_POR_N_I','i',1),('FABRIC_QUAD_MCU_REQ_I','i',1),
+    ('CK_AHB_I','i',1),('AHB_RSTN','i',1),('TEST_DEC_EN','i',1),('FABRIC_LANE0_CMU_OK_O','o',1),
+    ('FABRIC_LANE1_CMU_OK_O','o',1),('FABRIC_LANE2_CMU_OK_O','o',1),
+    ('FABRIC_LANE3_CMU_OK_O','o',1),('QUAD_PCIE_CLK','i',1),('PCIE_DIV2_REG','i',1),
+    ('PCIE_DIV4_REG','i',1),('PMAC_LN_RSTN','i',1),('INET_Q0_Q1','io',92),
+    ('INET_Q_PMAC','io',532),('INET_Q_TEST','io',228),('INET_Q_UPAR','io',421),
+]
+
+# INET bus -> .dat table that decodes its bits to real fabric wires, with the routed
+# direction (DBIns = fabric->GTR = bel INPUT, DBOuts = GTR->fabric = bel OUTPUT). The .dat
+# rows confirm WHICH INET bits are genuine fabric taps; we route a minimal subset.
+_GTR_INET_TABLES = [
+    ('INET_Q_UPAR', 'in',  'Gtrl12UparDBIns'),  ('INET_Q_UPAR', 'out', 'Gtrl12UparDBOuts'),
+    ('INET_Q_TEST', 'in',  'Gtrl12QuadDBIns2'), ('INET_Q_TEST', 'out', 'Gtrl12QuadDBOuts1'),
+    ('INET_Q0_Q1',  'out', 'Gtrl12QuadDBOuts2'),
+    ('INET_Q_PMAC', 'in',  'Gtrl12PmacDBIns'),  ('INET_Q_PMAC', 'out', 'Gtrl12PmacDBOuts'),
+]
+
+# How many routable taps to bridge per direction per quad. The minimal-tap model: enough
+# for an open-flow smoke design to drive/observe routed fabric wires without building the
+# full (unrecovered) FABRIC_* functional routing.
+_GTR_MAX_REAL_TAPS = 8
+
+# Phase 2b Option A: the FABRIC_* functional pins a real USB3 design (serdes.v) DRIVES with
+# fabric logic -> they need routable fabric wires (joined to real .dat taps).  Excludes the
+# LN*_TX[MP]_O analog pads (real package pins, not fabric) and the GND-tied config inputs
+# (handled by the VSS pip in step 1).  Derived from hdl/usb3-openflow/serdes.v GTR instance.
+_GTR_DATAPATH_PINS = {
+    'FABRIC_CLK_MON_O', 'FABRIC_CM1_LIFE_CLK_O', 'FABRIC_CM_LIFE_CLK_O', 'FABRIC_CMU0_CLK',
+    'FABRIC_CMU1_CK_REF_O', 'FABRIC_CMU1_CLK', 'FABRIC_CMU1_OK_O', 'FABRIC_CMU1_REFCLK_GATE_ACK_O',
+    'FABRIC_CMU_CK_REF_O', 'FABRIC_CMU_OK_O', 'FABRIC_CMU_REFCLK_GATE_ACK_O', 'FABRIC_GEARFIFO_ERR_RPT',
+    'FABRIC_LANE0_CMU_CK_REF_O', 'FABRIC_LANE0_CMU_OK_O', 'FABRIC_LANE1_CMU_CK_REF_O', 'FABRIC_LANE1_CMU_OK_O',
+    'FABRIC_LANE2_CMU_CK_REF_O', 'FABRIC_LANE2_CMU_OK_O', 'FABRIC_LANE3_CMU_CK_REF_O', 'FABRIC_LANE3_CMU_OK_O',
+    'FABRIC_LN0_ASTAT_O', 'FABRIC_LN0_BURN_IN_TOGGLE_O', 'FABRIC_LN0_PMA_RX_LOCK_O', 'FABRIC_LN0_RXDATA_O',
+    'FABRIC_LN0_RXDET_RESULT', 'FABRIC_LN0_RXELECIDLE_O', 'FABRIC_LN0_RXELECIDLE_O_H', 'FABRIC_LN0_RX_VLD_OUT',
+    'FABRIC_LN0_STAT_O', 'FABRIC_LN0_STAT_O_H', 'FABRIC_LN1_ASTAT_O', 'FABRIC_LN1_BURN_IN_TOGGLE_O',
+    'FABRIC_LN1_PMA_RX_LOCK_O', 'FABRIC_LN1_RXDATA_O', 'FABRIC_LN1_RXDET_RESULT', 'FABRIC_LN1_RXELECIDLE_O',
+    'FABRIC_LN1_RXELECIDLE_O_H', 'FABRIC_LN1_RX_VLD_OUT', 'FABRIC_LN1_STAT_O', 'FABRIC_LN1_STAT_O_H',
+    'FABRIC_LN2_ASTAT_O', 'FABRIC_LN2_BURN_IN_TOGGLE_O', 'FABRIC_LN2_PMA_RX_LOCK_O', 'FABRIC_LN2_RSTN_I',
+    'FABRIC_LN2_RXDATA_O', 'FABRIC_LN2_RXDET_RESULT', 'FABRIC_LN2_RXELECIDLE_O', 'FABRIC_LN2_RXELECIDLE_O_H',
+    'FABRIC_LN2_RX_VLD_OUT', 'FABRIC_LN2_STAT_O', 'FABRIC_LN2_STAT_O_H', 'FABRIC_LN2_TXDATA_I',
+    'FABRIC_LN2_TX_VLD_IN', 'FABRIC_LN3_ASTAT_O', 'FABRIC_LN3_BURN_IN_TOGGLE_O', 'FABRIC_LN3_PMA_RX_LOCK_O',
+    'FABRIC_LN3_RXDATA_O', 'FABRIC_LN3_RXDET_RESULT', 'FABRIC_LN3_RXELECIDLE_O', 'FABRIC_LN3_RXELECIDLE_O_H',
+    'FABRIC_LN3_RX_VLD_OUT', 'FABRIC_LN3_STAT_O', 'FABRIC_LN3_STAT_O_H', 'FABRIC_PMA_CM0_DR_REFCLK_DET_O',
+    'FABRIC_PMA_CM1_DR_REFCLK_DET_O', 'FABRIC_QUAD_CLK_RX', 'FABRIC_REFCLK_GATE_ACK_O',
+    # also the per-lane TXDATA/TX_VLD on lanes 0/1/3 (serdes.v drives all four lanes)
+    'FABRIC_LN0_TXDATA_I', 'FABRIC_LN0_TX_VLD_IN', 'FABRIC_LN1_TXDATA_I', 'FABRIC_LN1_TX_VLD_IN',
+    'FABRIC_LN3_TXDATA_I', 'FABRIC_LN3_TX_VLD_IN',
+}
+
+def _gtr_tap_bits(dat, table, want):
+    """Yield the first `want` decodable INET bit indices of a .dat GTR table (the bits that
+    are genuine fabric taps, per the .dat). Mirrors the portmap.json filtering: skip
+    0xFFFF wire/delta sentinels and unknown wire ids."""
+    tab = dat.gw5aStuff.get(table)
+    if not tab:
+        return
+    n = 0
+    for bit, prt in enumerate(tab):
+        wire_idx, dlt_r, dlt_c = prt[0], prt[1], prt[2]
+        if wire_idx is None or wire_idx == 0xffff or wire_idx not in wnames.wirenames:
+            continue
+        if dlt_r == 0xffff or dlt_c == 0xffff:
+            continue
+        yield bit
+        n += 1
+        if n >= want:
+            return
+
+def _is_generic_routing_root(wire):
+    """True if `wire` is a generic directional routing wire that arch-gen's create_nodes()
+    puts into a node -- as either the root or a hop member. These wires are:
+      {N,S,E,W}{1,2,8}{idx}{seg}  (1/2/8-hop segments, e.g. E100, S272, W284, N188)
+      SN{idx}{seg} / EW{idx}{seg} (global cross wires)
+    Joining ANY of them into a GTR datapath node reroots a wire create_nodes already owns
+    -> nextpnr add_node "wire to multiple nodes" (E100@(0,27), S272@(103,93), ...). Skip them;
+    the .dat has thousands of non-directional (CLB LUT / mesh) taps to use instead.
+
+    Segment ranges create_nodes emits: 1-hop seg in {0,1}; 2-hop seg in {0,1,2}; 8-hop seg in
+    {0,4,8}. We accept any trailing-digit form so future segment additions stay covered."""
+    if not wire or len(wire) < 3:
+        return False
+    d = wire[0]
+    # {N,S,E,W}{1,2,8}{idx}{seg}: hop-count digit then all-digit index+segment tail
+    if d in 'NSEW' and wire[1] in '128' and wire[2:].isdigit():
+        return True
+    # SN{idx}{seg} / EW{idx}{seg} global cross wires
+    if wire[:2] in ('SN', 'EW') and wire[2:].isdigit():
+        return True
+    return False
+
+def _gtr_tap_wires(dat, tables):
+    """Yield (wire_name, dlt_r, dlt_c) for every genuine fabric tap across the given .dat GTR
+    tables. Used to give the DRIVEN FABRIC_* datapath pins real routable fabric wires (the
+    anchor tile has NO local mesh, so each pin must reach a wire at a delta tile). The .dat
+    has thousands of such taps (PMAC ~2526, Quad ~644); we consume them in order, one per
+    routed pin-bit. (Phase 2b Option A: physically-grounded taps so the design ROUTES; the
+    exact FABRIC_*<->INET correspondence is the Option-B refinement.)"""
+    seen = set()
+    for table in tables:
+        tab = dat.gw5aStuff.get(table)
+        if not tab:
+            continue
+        for prt in tab:
+            wire_idx, dlt_r, dlt_c = prt[0], prt[1], prt[2]
+            if wire_idx is None or wire_idx == 0xffff or wire_idx not in wnames.wirenames:
+                continue
+            if dlt_r == 0xffff or dlt_c == 0xffff:
+                continue
+            key = (wire_idx, dlt_r, dlt_c)
+            if key in seen:
+                continue
+            seen.add(key)
+            wire = wnames.wirenames[wire_idx]
+            if _is_generic_routing_root(wire):
+                # create_nodes() already roots this directional wire; joining it into a
+                # GTR node collides (E100@(0,27) "wire to multiple nodes"). Skip it.
+                continue
+            yield (wire, dlt_r, dlt_c)
+
+def fse_create_gtr(dev, device, fse, dat):
+    """GW5AST-138C GTR12_QUAD transceiver bels.
+
+    Exposes every prim_sim.v GTR12_QUAD port (per bit) so a real instantiation binds, and
+    bridges a minimal set of .dat-confirmed INET tap bits to UNIQUE in-tile fabric routing
+    wires so an open-flow design can route them. Config is via the CSR (gowin_pack
+    --serdes_csr), not tile fuses. See the module-level note for the FABRIC_* vs INET_*
+    model and the remaining functional-routing gap.
+
+    NOTE on routing: the .dat taps point at ordinary CLB LUT wires 50-200 cols from the
+    anchor; those wires are already roots of the normal routing graph, so joining them into
+    a GTR node reroots them (nextpnr add_node: "wire to multiple nodes"). Modelling the
+    vendor's dedicated GTR<->fabric routing is the ECP5-DCU-parity gap. For the open-flow
+    smoke path we instead bridge each routed pin to a DISTINCT in-anchor-tile directional
+    routing wire (E/W/N/S/X*), which himbaechel's switch matrix already spans to neighbours.
+    """
+    if device not in {'GW5AST-138C'} or not _GTR_QUAD_ANCHORS:
+        return
+    for qi, (row, col) in enumerate(_GTR_QUAD_ANCHORS):
+        tt = dev[row, col]
+        extra = dev.extra_func.setdefault((row, col), {})
+        gtr = extra.setdefault('gtr', {})
+        ins = gtr.setdefault('inputs', {})
+        outs = gtr.setdefault('outputs', {})
+
+        # 1) Every prim_sim port -> a per-bit bel pin on a unique in-tile wire. Most stay
+        #    unrouted (CSR-driven / dangling, as on silicon); the bel is GLOBAL so that's OK.
+        #    INPUT pins additionally get a pip from the global VSS constant source so an
+        #    open-flow design can tie them to GND (serdes.v grounds ~119 GTR config inputs:
+        #    refclk selects, lane RX, CMU power-down, etc.).  Without this the GTR anchor
+        #    tile (0,27)/(0,99) has ZERO mesh wires, so $PACKER_GND cannot reach the input
+        #    pin_wire and routing fails ("Failed to route arc N of net $PACKER_GND").  A VSS
+        #    pip costs no fabric routing -- nextpnr resolves it as a constant tie-off.
+        for name, direction, width in _GTR_QUAD_PORTS:
+            dest = ins if direction == 'i' else outs   # inout buses default to OUTPUT
+            for b in range(width):
+                pin = name if width == 1 else f'{name}[{b}]'
+                pin_wire = f'GTR{qi}_{name}_{b}'
+                dev.wire_delay[pin_wire] = 'X0'
+                dest[pin] = pin_wire
+                if direction == 'i':                   # GND-tie path for unused config inputs
+                    tt.pips.setdefault(pin_wire, {}).update({'VSS': set()})
+
+        # 2) Routable taps: bridge the .dat-confirmed INET tap bits to UNIQUE anchor-tile
+        #    directional routing wires (no sharing -> no shorts). Each such wire is a real
+        #    fabric routing resource the open flow can reach.
+        mesh = sorted(w for w in set(tt.pips) | {s for ss in tt.pips.values() for s in ss}
+                      if (w and w[0] in 'XNSEW' and any(c.isdigit() for c in w)))
+        mi = 0
+        bridged = set()                            # pins already given a routable bridge
+        for bus, direction, table in _GTR_INET_TABLES:
+            for bit in _gtr_tap_bits(dat, table, _GTR_MAX_REAL_TAPS):
+                if mi >= len(mesh):
+                    break
+                pin = f'{bus}[{bit}]'
+                if pin in bridged:                 # one bridge per pin (avoid stale dual pips)
+                    continue
+                bridged.add(pin)
+                pin_wire = f'GTR{qi}_{bus}_{bit}'
+                bridge = mesh[mi]; mi += 1          # UNIQUE routing wire per routed pin
+                if direction == 'in':              # fabric -> bel pin
+                    tt.pips.setdefault(pin_wire, {}).update({bridge: set()})
+                    ins[pin] = pin_wire
+                    outs.pop(pin, None)
+                else:                              # bel pin -> fabric
+                    tt.pips.setdefault(bridge, {}).update({pin_wire: set()})
+                    outs[pin] = pin_wire
+                    ins.pop(pin, None)
+
+        # 3) DATAPATH ROUTING (Phase 2b Option A): the driven FABRIC_* functional pins
+        #    (RX/TX data, lane status, CMU clocks) must reach fabric so an open-flow USB3
+        #    design ROUTES.  The anchor tile has no local mesh, so join each driven FABRIC_*
+        #    pin-bit's pin_wire into a routing NODE with a REAL .dat tap wire at its delta
+        #    tile (thousands available in QuadDB/PmacDB).  Physically-grounded (real fabric
+        #    wires), though the exact FABRIC_*<->INET correspondence is the Option-B refinement.
+        taps = _gtr_tap_wires(dat, ['Gtrl12QuadDBOuts1', 'Gtrl12QuadDBOuts2',
+                                    'Gtrl12QuadDBIns2', 'Gtrl12PmacDBOuts', 'Gtrl12PmacDBIns'])
+        for name, direction, width in _GTR_QUAD_PORTS:
+            if name not in _GTR_DATAPATH_PINS:
+                continue
+            for b in range(width):
+                pin = name if width == 1 else f'{name}[{b}]'
+                pin_wire = f'GTR{qi}_{name}_{b}'
+                try:
+                    tw, dr, dc = next(taps)
+                except StopIteration:
+                    break
+                trow, tcol = row + dr, col + dc
+                if not (0 <= trow < dev.rows and 0 <= tcol < dev.cols):
+                    continue
+                node = add_node(dev, f'GTR{qi}_DP_{name}_{b}', 'GLOBAL_CLK', row, col, pin_wire)
+                add_node(dev, node, 'GLOBAL_CLK', trow, tcol, tw)
+
 # Only the slots that are used are added to the binary image.
 def fse_create_slot_plls(dev, device, fse, dat):
+    # NOTE: GW5AST-138C is intentionally NOT handled here. It does NOT use the
+    # GW5A-25A "slot PLLA" architecture: its PLL primitive is `PLL` (not `PLLA`),
+    # it has 12 BPLL instances (vs 6 PLLA slots), a 109x182 grid (vs 37x92), and
+    # its .dat per-corner PLL routing tables (PllLT/LB/RT/RB Ins/Outs) are all
+    # 0xFFFF-sentinel (empty) while the .fse lacks the shortval[1024] DRP fuse
+    # table. Un-gating to 138C here only crashes (KeyError on wirenames[-1]).
+    # A working 138C PLL needs a new BPLL model, not this 25A machinery.
     if device not in {"GW5A-25A"}:
         return
     for row, col, slot_idx, io_table in {(27, 0, 6, 'PllLB'), (27, 91, 2, 'PllRB'), (0, 0, 5, 'PllLT'), (0, 91, 3, 'PllRT'), (0, 45, 4, 'old_style'), (36, 45, 8, 'old_style')}:
@@ -2268,6 +2745,485 @@ def fse_create_slot_plls(dev, device, fse, dat):
         portmap[nam] = f'PLLA{nam}'
         # Himbaechel node
         dev.nodes.setdefault(f'MPLL{pll_idx}{nam}', (wire_type, set()))[1].add((row, col, f'PLLA{nam}'))
+
+# ----------------------------------------------------------------------------
+# GW5AST-138C bottom-edge PLL (BPLL).
+#
+# Unlike the GW5A-25A "slot PLLA" architecture (see fse_create_slot_plls), the
+# 138C PLL is a main-grid `PLL` primitive whose config register lives in 4
+# bottom-edge tiles. The placed reference PLL occupies the head tile R108C146
+# (ttyp 182) plus its three neighbours C147/148/149 (ttyp 183-185). All divider
+# and enable fuses live in the head tile's local row 21 and in tile1 (C147).
+#
+# The .fse has NO PLL shortval[1024] fuse table for this device, so the config
+# modes are NOT derived via fuse_lookup. Instead we bake a STATIC attr->bit
+# table that was characterized bit-exact against gw_sh (45/47 -> 47/47, see
+# apycula/pll_fuzz_artifacts/ and bpll_encode.py). gowin_pack reads this table
+# from db.extra_func[(head_row, head_col)]['bpll']['bit_table'] and emits the
+# (tile, row, col) bits for IDIV/FBDIV/MDIV/ODIV0..6/CLKOUT0..6_EN.
+#
+# Every bit below is backed by a real gw_sh build (no fabricated fuses).
+
+# Row inside the head tile that holds the divider/enable register.
+_BPLL_ROW = 21
+# ODIVk thermometer: 7 cols high-aligned. (tile_index, base_col). The thermometer
+# spans base_col..base_col+6; ODIVk=N sets the top (7-log2(N)) columns.
+_BPLL_ODIV_THERM = {
+    0: (0, 90), 1: (0, 100), 2: (0, 110),
+    3: (1, 0), 4: (1, 10), 5: (1, 20), 6: (1, 30),
+}
+# Per-output enable bit: tile1 (C147) col 60+k.
+_BPLL_CLKOUT_EN_COL = {k: (1, 60 + k) for k in range(7)}
+# The 19 columns of the shared IDIV/FBDIV/MDIV register (all in head tile, row 21).
+_BPLL_DIV_COLS = [13, 14, 15, 23, 24, 25, 32, 33, 41, 42, 43, 44, 45, 61, 80, 81, 82, 83, 84]
+# (IDIV, FBDIV, MDIV) -> set of SET cols among _BPLL_DIV_COLS (head tile, row 21).
+# Each entry is a measured gw_sh build (see validate_encoder.py PASS=47).
+# PLL base/power-up configuration beyond the characterized div/odiv/enable
+# fields. IMPORTANT: parts of this set are VCO-configuration-dependent
+# (~100 fuses differ between VCO=800 and VCO=1200 oracles - loop filter /
+# range settings). This set is measured from the (IDIV1,FBDIV1,MDIV24,
+# ODIV0=25) = 48MHz oracle (o24_25, VCO=1200) and is correct for VCO=1200
+# configs; other VCO targets need their own oracle capture (future fuzz:
+# key the base by VCO range). Found on silicon: P0 (no power-up), then
+# unlocked free-run with the VCO-800 base.
+# V22 -> PLL CLKIN delivery chain (clock gates, spine enables, entry
+# taps) measured from the o24_25_shared oracle: V22 feeds BOTH the PLL
+# and fabric logic (the gate mux config differs from the PLL-only case -
+# that exact conflict kept the PLL unlocked). Restricted to the known
+# chain tiles. PLL reference hardwired to the V22 route; general CLKIN
+# routing is future work.
+_BPLL_CLKIN_PATH_BITS = [
+    (81,95,20,108), (81,95,20,109), (100,149,8,112), (100,149,8,114), (107,149,6,11), (107,149,7,13),
+    (107,149,7,15), (108,150,8,11), (108,150,8,12), (108,150,9,13), (108,150,9,15), (108,151,8,95),
+    (108,151,8,96), (108,151,9,97), (108,151,9,99), (108,154,20,25),
+]
+_BPLL_BASE_BITS = [
+    (0,2,50), (0,2,51), (0,2,52), (0,2,58), (0,2,60), (0,3,50), (0,3,51), (0,3,58),
+    (0,4,0), (0,4,6), (0,4,22), (0,4,30), (0,4,31), (0,4,84), (0,4,90), (0,4,107),
+    (0,4,112), (0,5,0), (0,5,10), (0,5,22), (0,5,84), (0,5,94), (0,5,107), (0,5,112),
+    (0,6,0), (0,6,6), (0,6,23), (0,6,28), (0,6,65), (0,6,69), (0,7,0), (0,7,10),
+    (0,7,23), (0,7,28), (0,7,65), (0,7,69), (0,8,1), (0,8,7), (0,8,23), (0,8,28),
+    (0,8,43), (0,8,49), (0,8,65), (0,8,69), (0,9,1), (0,9,7), (0,9,23), (0,9,28),
+    (0,9,43), (0,9,49), (0,9,65), (0,9,69), (0,21,1), (0,21,2), (0,21,3), (0,21,10),
+    (0,21,11), (0,21,12), (0,21,16), (0,21,17), (0,21,18), (0,21,20), (0,21,21), (0,21,26),
+    (0,21,27), (0,21,28), (0,21,30), (0,21,31), (0,21,34), (0,21,35), (0,21,47), (0,21,54),
+    (0,21,55), (0,21,56), (0,21,57), (0,21,58), (0,21,63), (0,21,67), (0,21,68), (0,21,69),
+    (0,21,85), (0,21,86), (0,21,87), (0,21,88), (0,21,89), (0,21,97), (0,21,98), (0,21,99),
+    (1,2,50), (1,2,52), (1,2,60), (1,3,50), (1,4,0), (1,4,1), (1,4,3), (1,4,22),
+    (1,4,23), (1,4,25), (1,4,43), (1,4,47), (1,4,65), (1,4,69), (1,4,84), (1,4,85),
+    (1,4,87), (1,4,107), (1,4,112), (1,5,0), (1,5,1), (1,5,3), (1,5,6), (1,5,9),
+    (1,5,22), (1,5,23), (1,5,25), (1,5,29), (1,5,30), (1,5,43), (1,5,47), (1,5,65),
+    (1,5,69), (1,5,84), (1,5,85), (1,5,87), (1,5,90), (1,5,93), (1,5,107), (1,5,112),
+    (1,6,0), (1,6,1), (1,6,3), (1,6,23), (1,6,28), (1,6,43), (1,6,47), (1,6,65),
+    (1,6,69), (1,6,85), (1,6,89), (1,7,0), (1,7,1), (1,7,3), (1,7,6), (1,7,9),
+    (1,7,23), (1,7,28), (1,7,43), (1,7,47), (1,7,65), (1,7,69), (1,7,85), (1,7,89),
+    (1,8,43), (1,8,49), (1,8,65), (1,8,69), (1,8,85), (1,8,89), (1,9,65), (1,9,69),
+    (1,9,85), (1,9,89), (1,21,41), (1,21,42), (1,21,43), (1,21,44), (1,21,46), (1,21,47),
+    (1,21,48), (1,21,49), (1,21,51), (1,21,52), (1,21,53), (1,21,54), (1,21,56), (1,21,57),
+    (1,21,58), (1,21,59), (1,21,90), (1,21,91), (1,21,92), (1,21,93), (1,21,94), (1,21,95),
+    (1,21,96), (1,21,97), (1,21,98), (1,21,99), (1,21,100), (1,21,101), (1,21,102), (1,21,103),
+    (1,21,104), (1,21,105), (1,21,106), (1,21,107), (1,21,108), (1,21,109), (1,21,110), (1,21,111),
+    (1,21,112), (1,21,113), (1,21,114), (1,21,115), (1,21,116), (1,21,117), (1,21,118), (1,21,119),
+    (2,2,61), (2,2,62), (2,2,63), (2,2,69), (2,2,71), (2,3,61), (2,3,62), (2,3,69),
+    (2,4,1), (2,4,7), (2,4,23), (2,4,28), (2,4,32), (2,4,33), (2,4,43), (2,4,46),
+    (2,4,65), (2,4,68), (2,4,85), (2,4,91), (2,4,107), (2,4,111), (2,5,1), (2,5,7),
+    (2,5,23), (2,5,28), (2,5,38), (2,5,41), (2,5,43), (2,5,46), (2,5,65), (2,5,68),
+    (2,5,85), (2,5,91), (2,5,107), (2,5,111), (2,6,1), (2,6,7), (2,6,21), (2,6,22),
+    (2,6,23), (2,6,28), (2,6,43), (2,6,46), (2,6,65), (2,6,68), (2,6,85), (2,6,88),
+    (2,7,1), (2,7,7), (2,7,21), (2,7,22), (2,7,23), (2,7,28), (2,7,43), (2,7,46),
+    (2,7,65), (2,7,68), (2,7,85), (2,7,88), (2,8,0), (2,8,1), (2,8,7), (2,8,9),
+    (2,8,10), (2,8,21), (2,8,22), (2,8,23), (2,8,28), (2,8,42), (2,8,43), (2,8,44),
+    (2,8,65), (2,8,68), (2,8,85), (2,8,88), (2,9,0), (2,9,1), (2,9,7), (2,9,21),
+    (2,9,22), (2,9,23), (2,9,28), (2,9,42), (2,9,43), (2,9,44), (2,9,48), (2,9,51),
+    (2,9,65), (2,9,68), (2,9,85), (2,9,88), (2,21,0), (2,21,1), (2,21,2), (2,21,3),
+    (2,21,4), (2,21,5), (2,21,6), (2,21,7), (2,21,8), (2,21,9), (2,21,10), (2,21,11),
+    (2,21,12), (2,21,13), (2,21,14), (2,21,15), (2,21,16), (2,21,17), (2,21,18), (2,21,19),
+    (2,21,20), (2,21,21), (2,21,22), (2,21,23), (2,21,24), (2,21,25), (2,21,26), (2,21,27),
+    (2,21,28), (2,21,29), (2,21,30), (2,21,31), (2,21,32), (2,21,33), (2,21,34), (2,21,35),
+    (2,21,36), (2,21,37), (2,21,38), (2,21,39), (2,21,40), (2,21,41), (2,21,42), (2,21,43),
+    (2,21,44), (2,21,45), (2,21,46), (2,21,47), (2,21,48), (2,21,49), (3,2,50), (3,2,61),
+    (3,2,88), (3,2,94), (3,2,95), (3,2,96), (3,2,106), (3,2,107), (3,2,108), (3,2,110),
+    (3,2,111), (3,2,113), (3,2,115), (3,3,50), (3,3,51), (3,3,52), (3,3,53), (3,3,60),
+    (3,3,61), (3,3,62), (3,3,63), (3,3,70), (3,3,71), (3,3,84), (3,3,94), (3,3,106),
+    (3,3,107), (3,3,110), (3,3,113), (3,3,115), (3,4,0), (3,4,1), (3,4,5), (3,4,9),
+    (3,4,10), (3,4,11), (3,4,12), (3,4,21), (3,4,22), (3,4,23), (3,4,27), (3,4,43),
+    (3,4,47), (3,4,65), (3,4,69), (3,4,80), (3,4,85), (3,4,91), (3,4,106), (3,4,107),
+    (3,4,109), (3,4,116), (3,5,0), (3,5,1), (3,5,5), (3,5,13), (3,5,15), (3,5,21),
+    (3,5,22), (3,5,23), (3,5,27), (3,5,43), (3,5,47), (3,5,65), (3,5,69), (3,5,74),
+    (3,5,75), (3,5,76), (3,5,85), (3,5,91), (3,5,106), (3,5,107), (3,5,108), (3,5,109),
+    (3,6,1), (3,6,7), (3,6,21), (3,6,22), (3,6,23), (3,6,29), (3,6,43), (3,6,47),
+    (3,6,65), (3,6,68), (3,7,0), (3,7,1), (3,7,2), (3,7,9), (3,7,21), (3,7,22),
+    (3,7,23), (3,7,31), (3,7,43), (3,7,47), (3,7,65), (3,7,68), (3,7,85), (3,7,89),
+    (3,8,0), (3,8,1), (3,8,8), (3,8,9), (3,8,10), (3,8,21), (3,8,22), (3,8,23),
+    (3,8,29), (3,8,42), (3,8,43), (3,8,50), (3,8,51), (3,8,52), (3,8,55), (3,8,57),
+    (3,8,64), (3,8,65), (3,8,84), (3,8,85), (3,8,86), (3,8,107), (3,8,109), (3,9,0),
+    (3,9,1), (3,9,8), (3,9,21), (3,9,22), (3,9,23), (3,9,31), (3,9,42), (3,9,43),
+    (3,9,50), (3,9,53), (3,9,54), (3,9,63), (3,9,70), (3,9,84), (3,9,85), (3,9,86),
+    (3,9,90), (3,9,93), (3,9,107), (3,9,109), (3,11,115),
+]
+
+# ── VCO-KEYED BPLL base bits ──────────────────────────────────────────────────────────────────
+# The BPLL analog block (CP+LPF+VCO calibration, datasheet UG306E "Analog(CP+LPF+VCO)") is
+# VCO-FREQUENCY-SPECIFIC: the base/loop-filter fuses change with the VCO band.  _BPLL_BASE_BITS
+# above is the VCO=1200 MHz baked base.  VCO=900 (FCLKIN/IDIV*MDIV; e.g. 50/1*18) differs by 108
+# bits, 92 of them in the analog rows 2-9 — extracted from a gw_sh oracle build pinned to PLL_B[2]
+# and datasheet-cross-checked (MDIV field = inverted-linear 32-MDIV, per Table 5-7).  Select the
+# base by computed VCO so the open flow emits a LOCKING PLL at non-1200 VCOs (the L96 ring = 900).
+_BPLL_BASE_BITS_VCO900 = [
+    (0,0,65),    (0,0,68),    (0,0,99),    (0,0,109),    (0,0,110),    (0,1,91),    (0,1,92),    (0,1,96),
+    (0,1,113),    (0,1,117),    (0,2,20),    (0,2,50),    (0,2,51),    (0,2,52),    (0,2,58),    (0,2,60),
+    (0,3,19),    (0,3,20),    (0,3,21),    (0,3,24),    (0,3,25),    (0,3,50),    (0,3,51),    (0,3,58),
+    (0,4,0),    (0,4,6),    (0,4,22),    (0,4,30),    (0,4,31),    (0,4,84),    (0,4,90),    (0,4,107),
+    (0,4,112),    (0,5,0),    (0,5,10),    (0,5,22),    (0,5,84),    (0,5,94),    (0,5,107),    (0,5,112),
+    (0,6,0),    (0,6,6),    (0,6,23),    (0,6,28),    (0,6,65),    (0,6,69),    (0,7,0),    (0,7,10),
+    (0,7,23),    (0,7,28),    (0,7,65),    (0,7,69),    (0,8,1),    (0,8,7),    (0,8,23),    (0,8,28),
+    (0,8,43),    (0,8,49),    (0,8,65),    (0,8,69),    (0,9,1),    (0,9,7),    (0,9,23),    (0,9,28),
+    (0,9,43),    (0,9,49),    (0,9,65),    (0,9,69),    (0,21,1),    (0,21,2),    (0,21,3),    (0,21,12),
+    (0,21,16),    (0,21,17),    (0,21,18),    (0,21,20),    (0,21,21),    (0,21,26),    (0,21,27),    (0,21,28),
+    (0,21,30),    (0,21,31),    (0,21,34),    (0,21,35),    (0,21,47),    (0,21,54),    (0,21,55),    (0,21,56),
+    (0,21,57),    (0,21,58),    (0,21,63),    (0,21,67),    (0,21,68),    (0,21,69),    (0,21,85),    (0,21,86),
+    (0,21,87),    (0,21,88),    (0,21,89),    (0,21,92),    (0,21,93),    (0,21,94),    (0,21,97),    (0,21,98),
+    (0,21,99),    (1,2,50),    (1,2,52),    (1,2,60),    (1,3,50),    (1,4,0),    (1,4,1),    (1,4,3),
+    (1,4,22),    (1,4,23),    (1,4,25),    (1,4,43),    (1,4,47),    (1,4,65),    (1,4,69),    (1,4,84),
+    (1,4,85),    (1,4,87),    (1,4,107),    (1,4,112),    (1,5,0),    (1,5,1),    (1,5,3),    (1,5,6),
+    (1,5,9),    (1,5,22),    (1,5,23),    (1,5,25),    (1,5,29),    (1,5,30),    (1,5,43),    (1,5,47),
+    (1,5,65),    (1,5,69),    (1,5,84),    (1,5,85),    (1,5,87),    (1,5,90),    (1,5,93),    (1,5,107),
+    (1,5,112),    (1,6,0),    (1,6,1),    (1,6,3),    (1,6,23),    (1,6,28),    (1,6,43),    (1,6,47),
+    (1,6,65),    (1,6,69),    (1,6,85),    (1,6,89),    (1,7,0),    (1,7,1),    (1,7,3),    (1,7,6),
+    (1,7,9),    (1,7,23),    (1,7,28),    (1,7,43),    (1,7,47),    (1,7,65),    (1,7,69),    (1,7,85),
+    (1,7,89),    (1,8,43),    (1,8,49),    (1,8,65),    (1,8,69),    (1,8,85),    (1,8,89),    (1,9,65),
+    (1,9,69),    (1,9,85),    (1,9,89),    (1,21,41),    (1,21,42),    (1,21,43),    (1,21,44),    (1,21,46),
+    (1,21,47),    (1,21,48),    (1,21,49),    (1,21,51),    (1,21,52),    (1,21,53),    (1,21,54),    (1,21,56),
+    (1,21,57),    (1,21,58),    (1,21,59),    (1,21,90),    (1,21,91),    (1,21,92),    (1,21,93),    (1,21,94),
+    (1,21,95),    (1,21,96),    (1,21,97),    (1,21,98),    (1,21,99),    (1,21,100),    (1,21,101),    (1,21,102),
+    (1,21,103),    (1,21,104),    (1,21,105),    (1,21,106),    (1,21,107),    (1,21,108),    (1,21,109),    (1,21,110),
+    (1,21,111),    (1,21,112),    (1,21,113),    (1,21,114),    (1,21,115),    (1,21,116),    (1,21,117),    (1,21,118),
+    (1,21,119),    (2,2,61),    (2,2,62),    (2,2,63),    (2,2,68),    (2,2,71),    (2,3,61),    (2,3,62),
+    (2,3,68),    (2,4,1),    (2,4,7),    (2,4,23),    (2,4,28),    (2,4,32),    (2,4,33),    (2,4,43),
+    (2,4,46),    (2,4,65),    (2,4,68),    (2,4,85),    (2,4,91),    (2,4,107),    (2,4,111),    (2,5,1),
+    (2,5,7),    (2,5,23),    (2,5,28),    (2,5,38),    (2,5,41),    (2,5,43),    (2,5,46),    (2,5,65),
+    (2,5,68),    (2,5,85),    (2,5,91),    (2,5,107),    (2,5,111),    (2,6,1),    (2,6,7),    (2,6,21),
+    (2,6,22),    (2,6,23),    (2,6,29),    (2,6,43),    (2,6,46),    (2,6,65),    (2,6,68),    (2,6,85),
+    (2,6,88),    (2,7,1),    (2,7,7),    (2,7,21),    (2,7,22),    (2,7,23),    (2,7,31),    (2,7,43),
+    (2,7,46),    (2,7,65),    (2,7,68),    (2,7,85),    (2,7,88),    (2,8,0),    (2,8,1),    (2,8,8),
+    (2,8,9),    (2,8,10),    (2,8,21),    (2,8,22),    (2,8,23),    (2,8,29),    (2,8,42),    (2,8,43),
+    (2,8,44),    (2,8,65),    (2,8,68),    (2,8,85),    (2,8,88),    (2,9,0),    (2,9,1),    (2,9,8),
+    (2,9,21),    (2,9,22),    (2,9,23),    (2,9,31),    (2,9,42),    (2,9,43),    (2,9,44),    (2,9,48),
+    (2,9,51),    (2,9,65),    (2,9,68),    (2,9,85),    (2,9,88),    (2,21,0),    (2,21,1),    (2,21,2),
+    (2,21,3),    (2,21,4),    (2,21,5),    (2,21,6),    (2,21,7),    (2,21,8),    (2,21,9),    (2,21,10),
+    (2,21,11),    (2,21,12),    (2,21,13),    (2,21,14),    (2,21,15),    (2,21,16),    (2,21,17),    (2,21,18),
+    (2,21,19),    (2,21,20),    (2,21,21),    (2,21,22),    (2,21,23),    (2,21,24),    (2,21,25),    (2,21,26),
+    (2,21,27),    (2,21,28),    (2,21,29),    (2,21,30),    (2,21,31),    (2,21,32),    (2,21,33),    (2,21,34),
+    (2,21,35),    (2,21,36),    (2,21,37),    (2,21,38),    (2,21,39),    (2,21,40),    (2,21,41),    (2,21,42),
+    (2,21,43),    (2,21,44),    (2,21,45),    (2,21,46),    (2,21,47),    (2,21,48),    (2,21,49),    (3,2,40),
+    (3,2,48),    (3,2,50),    (3,2,61),    (3,2,94),    (3,2,95),    (3,2,96),    (3,2,106),    (3,2,107),
+    (3,2,108),    (3,2,110),    (3,2,111),    (3,2,113),    (3,2,115),    (3,3,50),    (3,3,51),    (3,3,52),
+    (3,3,53),    (3,3,60),    (3,3,61),    (3,3,62),    (3,3,63),    (3,3,70),    (3,3,71),    (3,3,94),
+    (3,3,106),    (3,3,107),    (3,3,110),    (3,3,113),    (3,3,115),    (3,4,0),    (3,4,1),    (3,4,2),
+    (3,4,11),    (3,4,12),    (3,4,22),    (3,4,23),    (3,4,24),    (3,4,30),    (3,4,31),    (3,4,43),
+    (3,4,47),    (3,4,65),    (3,4,69),    (3,4,74),    (3,4,75),    (3,4,80),    (3,4,84),    (3,4,85),
+    (3,4,86),    (3,4,90),    (3,4,106),    (3,4,107),    (3,4,109),    (3,4,116),    (3,5,0),    (3,5,1),
+    (3,5,2),    (3,5,6),    (3,5,9),    (3,5,13),    (3,5,15),    (3,5,22),    (3,5,23),    (3,5,24),
+    (3,5,43),    (3,5,47),    (3,5,65),    (3,5,69),    (3,5,74),    (3,5,75),    (3,5,76),    (3,5,80),
+    (3,5,83),    (3,5,84),    (3,5,85),    (3,5,86),    (3,5,94),    (3,5,106),    (3,5,107),    (3,5,108),
+    (3,5,109),    (3,6,1),    (3,6,7),    (3,6,21),    (3,6,22),    (3,6,23),    (3,6,27),    (3,6,43),
+    (3,6,47),    (3,6,65),    (3,6,68),    (3,6,106),    (3,6,107),    (3,6,111),    (3,6,116),    (3,7,0),
+    (3,7,1),    (3,7,2),    (3,7,9),    (3,7,21),    (3,7,22),    (3,7,23),    (3,7,27),    (3,7,43),
+    (3,7,47),    (3,7,65),    (3,7,68),    (3,7,85),    (3,7,89),    (3,7,106),    (3,7,107),    (3,7,108),
+    (3,7,111),    (3,8,1),    (3,8,7),    (3,8,11),    (3,8,12),    (3,8,23),    (3,8,28),    (3,8,42),
+    (3,8,43),    (3,8,47),    (3,8,51),    (3,8,52),    (3,8,55),    (3,8,57),    (3,8,65),    (3,8,84),
+    (3,8,85),    (3,8,86),    (3,8,107),    (3,8,109),    (3,9,1),    (3,9,7),    (3,9,13),    (3,9,15),
+    (3,9,23),    (3,9,28),    (3,9,42),    (3,9,43),    (3,9,47),    (3,9,53),    (3,9,54),    (3,9,70),
+    (3,9,84),    (3,9,85),    (3,9,86),    (3,9,90),    (3,9,93),    (3,9,107),    (3,9,109),
+]
+
+# Per-site VCO=900 BPLL base bits (PLL_B[0..3]); tile-local (ti,row,col).
+# Each site has a few site-specific clkin/route bits, so bake per-site for bit-exactness.
+_BPLL_BASE_VCO900_BY_SITE = {
+    0: [(0,0,74),(0,0,79),(0,1,47),(0,1,51),(0,1,65),(0,1,69),(0,2,20),(0,2,50),(0,2,51),(0,2,52),(0,2,58),(0,2,60),(0,3,19),(0,3,20),(0,3,21),(0,3,24),(0,3,25),(0,3,50),(0,3,51),(0,3,58),(0,4,0),(0,4,6),(0,4,22),(0,4,30),(0,4,31),(0,4,84),(0,4,90),(0,4,107),(0,4,112),(0,5,0),(0,5,10),(0,5,22),(0,5,84),(0,5,94),(0,5,107),(0,5,112),(0,6,0),(0,6,6),(0,6,23),(0,6,28),(0,6,65),(0,6,69),(0,7,0),(0,7,10),(0,7,23),(0,7,28),(0,7,65),(0,7,69),(0,8,1),(0,8,7),(0,8,23),(0,8,28),(0,8,43),(0,8,49),(0,8,65),(0,8,69),(0,9,1),(0,9,7),(0,9,23),(0,9,28),(0,9,43),(0,9,49),(0,9,65),(0,9,69),(0,11,117),(0,21,1),(0,21,2),(0,21,3),(0,21,12),(0,21,16),(0,21,17),(0,21,18),(0,21,20),(0,21,21),(0,21,26),(0,21,27),(0,21,28),(0,21,30),(0,21,31),(0,21,34),(0,21,35),(0,21,47),(0,21,54),(0,21,55),(0,21,56),(0,21,57),(0,21,58),(0,21,63),(0,21,67),(0,21,68),(0,21,69),(0,21,85),(0,21,86),(0,21,87),(0,21,88),(0,21,89),(0,21,92),(0,21,93),(0,21,94),(0,21,97),(0,21,98),(0,21,99),(1,2,50),(1,2,52),(1,2,60),(1,3,50),(1,4,0),(1,4,1),(1,4,3),(1,4,22),(1,4,23),(1,4,25),(1,4,43),(1,4,47),(1,4,65),(1,4,69),(1,4,84),(1,4,85),(1,4,87),(1,4,107),(1,4,112),(1,5,0),(1,5,1),(1,5,3),(1,5,6),(1,5,9),(1,5,22),(1,5,23),(1,5,25),(1,5,29),(1,5,30),(1,5,43),(1,5,47),(1,5,65),(1,5,69),(1,5,84),(1,5,85),(1,5,87),(1,5,90),(1,5,93),(1,5,107),(1,5,112),(1,6,0),(1,6,1),(1,6,3),(1,6,23),(1,6,28),(1,6,43),(1,6,47),(1,6,65),(1,6,69),(1,6,85),(1,6,89),(1,7,0),(1,7,1),(1,7,3),(1,7,6),(1,7,9),(1,7,23),(1,7,28),(1,7,43),(1,7,47),(1,7,65),(1,7,69),(1,7,85),(1,7,89),(1,8,43),(1,8,49),(1,8,65),(1,8,69),(1,8,85),(1,8,89),(1,9,65),(1,9,69),(1,9,85),(1,9,89),(1,11,117),(1,21,41),(1,21,42),(1,21,43),(1,21,44),(1,21,46),(1,21,47),(1,21,48),(1,21,49),(1,21,51),(1,21,52),(1,21,53),(1,21,54),(1,21,56),(1,21,57),(1,21,58),(1,21,59),(1,21,90),(1,21,91),(1,21,92),(1,21,93),(1,21,94),(1,21,95),(1,21,96),(1,21,97),(1,21,98),(1,21,99),(1,21,100),(1,21,101),(1,21,102),(1,21,103),(1,21,104),(1,21,105),(1,21,106),(1,21,107),(1,21,108),(1,21,109),(1,21,110),(1,21,111),(1,21,112),(1,21,113),(1,21,114),(1,21,115),(1,21,116),(1,21,117),(1,21,118),(1,21,119),(2,2,61),(2,2,62),(2,2,63),(2,2,68),(2,2,71),(2,3,61),(2,3,62),(2,3,68),(2,4,1),(2,4,7),(2,4,23),(2,4,28),(2,4,32),(2,4,33),(2,4,43),(2,4,46),(2,4,65),(2,4,68),(2,4,85),(2,4,91),(2,4,107),(2,4,111),(2,5,1),(2,5,7),(2,5,23),(2,5,28),(2,5,38),(2,5,41),(2,5,43),(2,5,46),(2,5,65),(2,5,68),(2,5,85),(2,5,91),(2,5,107),(2,5,111),(2,6,1),(2,6,7),(2,6,21),(2,6,22),(2,6,23),(2,6,29),(2,6,43),(2,6,46),(2,6,65),(2,6,68),(2,6,85),(2,6,88),(2,7,1),(2,7,7),(2,7,21),(2,7,22),(2,7,23),(2,7,31),(2,7,43),(2,7,46),(2,7,65),(2,7,68),(2,7,85),(2,7,88),(2,8,0),(2,8,1),(2,8,8),(2,8,9),(2,8,10),(2,8,21),(2,8,22),(2,8,23),(2,8,29),(2,8,42),(2,8,43),(2,8,44),(2,8,65),(2,8,68),(2,8,85),(2,8,88),(2,9,0),(2,9,1),(2,9,8),(2,9,21),(2,9,22),(2,9,23),(2,9,31),(2,9,42),(2,9,43),(2,9,44),(2,9,48),(2,9,51),(2,9,65),(2,9,68),(2,9,85),(2,9,88),(2,21,0),(2,21,1),(2,21,2),(2,21,3),(2,21,4),(2,21,5),(2,21,6),(2,21,7),(2,21,8),(2,21,9),(2,21,10),(2,21,11),(2,21,12),(2,21,13),(2,21,14),(2,21,15),(2,21,16),(2,21,17),(2,21,18),(2,21,19),(2,21,20),(2,21,21),(2,21,22),(2,21,23),(2,21,24),(2,21,25),(2,21,26),(2,21,27),(2,21,28),(2,21,29),(2,21,30),(2,21,31),(2,21,32),(2,21,33),(2,21,34),(2,21,35),(2,21,36),(2,21,37),(2,21,38),(2,21,39),(2,21,40),(2,21,41),(2,21,42),(2,21,43),(2,21,44),(2,21,45),(2,21,46),(2,21,47),(2,21,48),(2,21,49),(3,2,40),(3,2,48),(3,2,50),(3,2,61),(3,2,94),(3,2,95),(3,2,96),(3,2,106),(3,2,107),(3,2,108),(3,2,110),(3,2,111),(3,2,113),(3,2,115),(3,3,50),(3,3,51),(3,3,52),(3,3,53),(3,3,60),(3,3,61),(3,3,62),(3,3,63),(3,3,70),(3,3,71),(3,3,94),(3,3,106),(3,3,107),(3,3,110),(3,3,113),(3,3,115),(3,4,0),(3,4,1),(3,4,2),(3,4,11),(3,4,12),(3,4,22),(3,4,23),(3,4,24),(3,4,30),(3,4,31),(3,4,43),(3,4,47),(3,4,65),(3,4,69),(3,4,74),(3,4,75),(3,4,80),(3,4,84),(3,4,85),(3,4,86),(3,4,90),(3,4,106),(3,4,107),(3,4,109),(3,4,116),(3,5,0),(3,5,1),(3,5,2),(3,5,6),(3,5,9),(3,5,13),(3,5,15),(3,5,22),(3,5,23),(3,5,24),(3,5,43),(3,5,47),(3,5,65),(3,5,69),(3,5,74),(3,5,75),(3,5,76),(3,5,80),(3,5,83),(3,5,84),(3,5,85),(3,5,86),(3,5,94),(3,5,106),(3,5,107),(3,5,108),(3,5,109),(3,6,1),(3,6,7),(3,6,21),(3,6,22),(3,6,23),(3,6,27),(3,6,43),(3,6,47),(3,6,65),(3,6,68),(3,6,106),(3,6,107),(3,6,111),(3,6,116),(3,7,0),(3,7,1),(3,7,2),(3,7,9),(3,7,21),(3,7,22),(3,7,23),(3,7,27),(3,7,43),(3,7,47),(3,7,65),(3,7,68),(3,7,85),(3,7,89),(3,7,106),(3,7,107),(3,7,108),(3,7,111),(3,8,1),(3,8,7),(3,8,11),(3,8,12),(3,8,23),(3,8,28),(3,8,42),(3,8,43),(3,8,47),(3,8,51),(3,8,52),(3,8,55),(3,8,57),(3,8,65),(3,8,84),(3,8,85),(3,8,86),(3,8,107),(3,8,109),(3,9,1),(3,9,7),(3,9,13),(3,9,15),(3,9,23),(3,9,28),(3,9,42),(3,9,43),(3,9,47),(3,9,53),(3,9,54),(3,9,70),(3,9,84),(3,9,85),(3,9,86),(3,9,90),(3,9,93),(3,9,107),(3,9,109)],
+    1: [(0,0,20),(0,0,25),(0,0,38),(0,0,43),(0,0,47),(0,0,51),(0,1,11),(0,1,15),(0,1,29),(0,1,33),(0,1,91),(0,1,93),(0,2,19),(0,2,20),(0,2,24),(0,2,50),(0,2,51),(0,2,52),(0,2,58),(0,2,60),(0,3,10),(0,3,11),(0,3,13),(0,3,16),(0,3,26),(0,3,50),(0,3,51),(0,3,58),(0,4,0),(0,4,6),(0,4,22),(0,4,30),(0,4,31),(0,4,84),(0,4,90),(0,4,107),(0,4,112),(0,5,0),(0,5,10),(0,5,22),(0,5,84),(0,5,94),(0,5,107),(0,5,112),(0,6,0),(0,6,6),(0,6,23),(0,6,28),(0,6,65),(0,6,69),(0,7,0),(0,7,10),(0,7,23),(0,7,28),(0,7,65),(0,7,69),(0,8,1),(0,8,7),(0,8,23),(0,8,28),(0,8,43),(0,8,49),(0,8,65),(0,8,69),(0,9,1),(0,9,7),(0,9,23),(0,9,28),(0,9,43),(0,9,49),(0,9,65),(0,9,69),(0,21,1),(0,21,2),(0,21,3),(0,21,12),(0,21,16),(0,21,17),(0,21,18),(0,21,20),(0,21,21),(0,21,26),(0,21,27),(0,21,28),(0,21,30),(0,21,31),(0,21,34),(0,21,35),(0,21,47),(0,21,54),(0,21,55),(0,21,56),(0,21,57),(0,21,58),(0,21,63),(0,21,67),(0,21,68),(0,21,69),(0,21,85),(0,21,86),(0,21,87),(0,21,88),(0,21,89),(0,21,92),(0,21,93),(0,21,94),(0,21,97),(0,21,98),(0,21,99),(1,0,28),(1,0,29),(1,0,34),(1,0,35),(1,2,50),(1,2,52),(1,2,60),(1,3,50),(1,4,0),(1,4,1),(1,4,3),(1,4,22),(1,4,23),(1,4,25),(1,4,43),(1,4,47),(1,4,65),(1,4,69),(1,4,84),(1,4,85),(1,4,87),(1,4,107),(1,4,112),(1,5,0),(1,5,1),(1,5,3),(1,5,6),(1,5,9),(1,5,22),(1,5,23),(1,5,25),(1,5,29),(1,5,30),(1,5,43),(1,5,47),(1,5,65),(1,5,69),(1,5,84),(1,5,85),(1,5,87),(1,5,90),(1,5,93),(1,5,107),(1,5,112),(1,6,0),(1,6,1),(1,6,3),(1,6,23),(1,6,28),(1,6,43),(1,6,47),(1,6,65),(1,6,69),(1,6,85),(1,6,89),(1,7,0),(1,7,1),(1,7,3),(1,7,6),(1,7,9),(1,7,23),(1,7,28),(1,7,43),(1,7,47),(1,7,65),(1,7,69),(1,7,85),(1,7,89),(1,8,43),(1,8,49),(1,8,65),(1,8,69),(1,8,85),(1,8,89),(1,9,65),(1,9,69),(1,9,85),(1,9,89),(1,11,117),(1,21,41),(1,21,42),(1,21,43),(1,21,44),(1,21,46),(1,21,47),(1,21,48),(1,21,49),(1,21,51),(1,21,52),(1,21,53),(1,21,54),(1,21,56),(1,21,57),(1,21,58),(1,21,59),(1,21,90),(1,21,91),(1,21,92),(1,21,93),(1,21,94),(1,21,95),(1,21,96),(1,21,97),(1,21,98),(1,21,99),(1,21,100),(1,21,101),(1,21,102),(1,21,103),(1,21,104),(1,21,105),(1,21,106),(1,21,107),(1,21,108),(1,21,109),(1,21,110),(1,21,111),(1,21,112),(1,21,113),(1,21,114),(1,21,115),(1,21,116),(1,21,117),(1,21,118),(1,21,119),(2,2,61),(2,2,62),(2,2,63),(2,2,68),(2,2,71),(2,3,61),(2,3,62),(2,3,68),(2,4,1),(2,4,7),(2,4,23),(2,4,28),(2,4,32),(2,4,33),(2,4,43),(2,4,46),(2,4,65),(2,4,68),(2,4,85),(2,4,91),(2,4,107),(2,4,111),(2,5,1),(2,5,7),(2,5,23),(2,5,28),(2,5,38),(2,5,41),(2,5,43),(2,5,46),(2,5,65),(2,5,68),(2,5,85),(2,5,91),(2,5,107),(2,5,111),(2,6,1),(2,6,7),(2,6,21),(2,6,22),(2,6,23),(2,6,29),(2,6,43),(2,6,46),(2,6,65),(2,6,68),(2,6,85),(2,6,88),(2,7,1),(2,7,7),(2,7,21),(2,7,22),(2,7,23),(2,7,31),(2,7,43),(2,7,46),(2,7,65),(2,7,68),(2,7,85),(2,7,88),(2,8,0),(2,8,1),(2,8,8),(2,8,9),(2,8,10),(2,8,21),(2,8,22),(2,8,23),(2,8,29),(2,8,42),(2,8,43),(2,8,44),(2,8,65),(2,8,68),(2,8,85),(2,8,88),(2,9,0),(2,9,1),(2,9,8),(2,9,21),(2,9,22),(2,9,23),(2,9,31),(2,9,42),(2,9,43),(2,9,44),(2,9,48),(2,9,51),(2,9,65),(2,9,68),(2,9,85),(2,9,88),(2,21,0),(2,21,1),(2,21,2),(2,21,3),(2,21,4),(2,21,5),(2,21,6),(2,21,7),(2,21,8),(2,21,9),(2,21,10),(2,21,11),(2,21,12),(2,21,13),(2,21,14),(2,21,15),(2,21,16),(2,21,17),(2,21,18),(2,21,19),(2,21,20),(2,21,21),(2,21,22),(2,21,23),(2,21,24),(2,21,25),(2,21,26),(2,21,27),(2,21,28),(2,21,29),(2,21,30),(2,21,31),(2,21,32),(2,21,33),(2,21,34),(2,21,35),(2,21,36),(2,21,37),(2,21,38),(2,21,39),(2,21,40),(2,21,41),(2,21,42),(2,21,43),(2,21,44),(2,21,45),(2,21,46),(2,21,47),(2,21,48),(2,21,49),(3,2,40),(3,2,48),(3,2,50),(3,2,61),(3,2,94),(3,2,95),(3,2,96),(3,2,106),(3,2,107),(3,2,108),(3,2,110),(3,2,111),(3,2,113),(3,2,115),(3,3,50),(3,3,51),(3,3,52),(3,3,53),(3,3,60),(3,3,61),(3,3,62),(3,3,63),(3,3,70),(3,3,71),(3,3,94),(3,3,106),(3,3,107),(3,3,110),(3,3,113),(3,3,115),(3,4,0),(3,4,1),(3,4,2),(3,4,11),(3,4,12),(3,4,22),(3,4,23),(3,4,24),(3,4,30),(3,4,31),(3,4,43),(3,4,47),(3,4,65),(3,4,69),(3,4,74),(3,4,75),(3,4,80),(3,4,84),(3,4,85),(3,4,86),(3,4,90),(3,4,106),(3,4,107),(3,4,109),(3,4,116),(3,5,0),(3,5,1),(3,5,2),(3,5,6),(3,5,9),(3,5,13),(3,5,15),(3,5,22),(3,5,23),(3,5,24),(3,5,43),(3,5,47),(3,5,65),(3,5,69),(3,5,74),(3,5,75),(3,5,76),(3,5,80),(3,5,83),(3,5,84),(3,5,85),(3,5,86),(3,5,94),(3,5,106),(3,5,107),(3,5,108),(3,5,109),(3,6,1),(3,6,7),(3,6,21),(3,6,22),(3,6,23),(3,6,27),(3,6,43),(3,6,47),(3,6,65),(3,6,68),(3,6,106),(3,6,107),(3,6,111),(3,6,116),(3,7,0),(3,7,1),(3,7,2),(3,7,9),(3,7,21),(3,7,22),(3,7,23),(3,7,27),(3,7,43),(3,7,47),(3,7,65),(3,7,68),(3,7,85),(3,7,89),(3,7,106),(3,7,107),(3,7,108),(3,7,111),(3,8,1),(3,8,7),(3,8,11),(3,8,12),(3,8,23),(3,8,28),(3,8,42),(3,8,43),(3,8,47),(3,8,51),(3,8,52),(3,8,55),(3,8,57),(3,8,65),(3,8,84),(3,8,85),(3,8,86),(3,8,107),(3,8,109),(3,9,1),(3,9,7),(3,9,13),(3,9,15),(3,9,23),(3,9,28),(3,9,42),(3,9,43),(3,9,47),(3,9,53),(3,9,54),(3,9,70),(3,9,84),(3,9,85),(3,9,86),(3,9,90),(3,9,93),(3,9,107),(3,9,109)],
+    2: [(0,0,65),(0,0,68),(0,0,99),(0,0,109),(0,0,110),(0,1,91),(0,1,92),(0,1,96),(0,1,113),(0,1,117),(0,2,20),(0,2,50),(0,2,51),(0,2,52),(0,2,58),(0,2,60),(0,3,19),(0,3,20),(0,3,21),(0,3,24),(0,3,25),(0,3,50),(0,3,51),(0,3,58),(0,4,0),(0,4,6),(0,4,22),(0,4,30),(0,4,31),(0,4,84),(0,4,90),(0,4,107),(0,4,112),(0,5,0),(0,5,10),(0,5,22),(0,5,84),(0,5,94),(0,5,107),(0,5,112),(0,6,0),(0,6,6),(0,6,23),(0,6,28),(0,6,65),(0,6,69),(0,7,0),(0,7,10),(0,7,23),(0,7,28),(0,7,65),(0,7,69),(0,8,1),(0,8,7),(0,8,23),(0,8,28),(0,8,43),(0,8,49),(0,8,65),(0,8,69),(0,9,1),(0,9,7),(0,9,23),(0,9,28),(0,9,43),(0,9,49),(0,9,65),(0,9,69),(0,21,1),(0,21,2),(0,21,3),(0,21,12),(0,21,16),(0,21,17),(0,21,18),(0,21,20),(0,21,21),(0,21,26),(0,21,27),(0,21,28),(0,21,30),(0,21,31),(0,21,34),(0,21,35),(0,21,47),(0,21,54),(0,21,55),(0,21,56),(0,21,57),(0,21,58),(0,21,63),(0,21,67),(0,21,68),(0,21,69),(0,21,85),(0,21,86),(0,21,87),(0,21,88),(0,21,89),(0,21,92),(0,21,93),(0,21,94),(0,21,97),(0,21,98),(0,21,99),(1,2,50),(1,2,52),(1,2,60),(1,3,50),(1,4,0),(1,4,1),(1,4,3),(1,4,22),(1,4,23),(1,4,25),(1,4,43),(1,4,47),(1,4,65),(1,4,69),(1,4,84),(1,4,85),(1,4,87),(1,4,107),(1,4,112),(1,5,0),(1,5,1),(1,5,3),(1,5,6),(1,5,9),(1,5,22),(1,5,23),(1,5,25),(1,5,29),(1,5,30),(1,5,43),(1,5,47),(1,5,65),(1,5,69),(1,5,84),(1,5,85),(1,5,87),(1,5,90),(1,5,93),(1,5,107),(1,5,112),(1,6,0),(1,6,1),(1,6,3),(1,6,23),(1,6,28),(1,6,43),(1,6,47),(1,6,65),(1,6,69),(1,6,85),(1,6,89),(1,7,0),(1,7,1),(1,7,3),(1,7,6),(1,7,9),(1,7,23),(1,7,28),(1,7,43),(1,7,47),(1,7,65),(1,7,69),(1,7,85),(1,7,89),(1,8,43),(1,8,49),(1,8,65),(1,8,69),(1,8,85),(1,8,89),(1,9,65),(1,9,69),(1,9,85),(1,9,89),(1,21,41),(1,21,42),(1,21,43),(1,21,44),(1,21,46),(1,21,47),(1,21,48),(1,21,49),(1,21,51),(1,21,52),(1,21,53),(1,21,54),(1,21,56),(1,21,57),(1,21,58),(1,21,59),(1,21,90),(1,21,91),(1,21,92),(1,21,93),(1,21,94),(1,21,95),(1,21,96),(1,21,97),(1,21,98),(1,21,99),(1,21,100),(1,21,101),(1,21,102),(1,21,103),(1,21,104),(1,21,105),(1,21,106),(1,21,107),(1,21,108),(1,21,109),(1,21,110),(1,21,111),(1,21,112),(1,21,113),(1,21,114),(1,21,115),(1,21,116),(1,21,117),(1,21,118),(1,21,119),(2,2,61),(2,2,62),(2,2,63),(2,2,68),(2,2,71),(2,3,61),(2,3,62),(2,3,68),(2,4,1),(2,4,7),(2,4,23),(2,4,28),(2,4,32),(2,4,33),(2,4,43),(2,4,46),(2,4,65),(2,4,68),(2,4,85),(2,4,91),(2,4,107),(2,4,111),(2,5,1),(2,5,7),(2,5,23),(2,5,28),(2,5,38),(2,5,41),(2,5,43),(2,5,46),(2,5,65),(2,5,68),(2,5,85),(2,5,91),(2,5,107),(2,5,111),(2,6,1),(2,6,7),(2,6,21),(2,6,22),(2,6,23),(2,6,29),(2,6,43),(2,6,46),(2,6,65),(2,6,68),(2,6,85),(2,6,88),(2,7,1),(2,7,7),(2,7,21),(2,7,22),(2,7,23),(2,7,31),(2,7,43),(2,7,46),(2,7,65),(2,7,68),(2,7,85),(2,7,88),(2,8,0),(2,8,1),(2,8,8),(2,8,9),(2,8,10),(2,8,21),(2,8,22),(2,8,23),(2,8,29),(2,8,42),(2,8,43),(2,8,44),(2,8,65),(2,8,68),(2,8,85),(2,8,88),(2,9,0),(2,9,1),(2,9,8),(2,9,21),(2,9,22),(2,9,23),(2,9,31),(2,9,42),(2,9,43),(2,9,44),(2,9,48),(2,9,51),(2,9,65),(2,9,68),(2,9,85),(2,9,88),(2,21,0),(2,21,1),(2,21,2),(2,21,3),(2,21,4),(2,21,5),(2,21,6),(2,21,7),(2,21,8),(2,21,9),(2,21,10),(2,21,11),(2,21,12),(2,21,13),(2,21,14),(2,21,15),(2,21,16),(2,21,17),(2,21,18),(2,21,19),(2,21,20),(2,21,21),(2,21,22),(2,21,23),(2,21,24),(2,21,25),(2,21,26),(2,21,27),(2,21,28),(2,21,29),(2,21,30),(2,21,31),(2,21,32),(2,21,33),(2,21,34),(2,21,35),(2,21,36),(2,21,37),(2,21,38),(2,21,39),(2,21,40),(2,21,41),(2,21,42),(2,21,43),(2,21,44),(2,21,45),(2,21,46),(2,21,47),(2,21,48),(2,21,49),(3,2,40),(3,2,48),(3,2,50),(3,2,61),(3,2,94),(3,2,95),(3,2,96),(3,2,106),(3,2,107),(3,2,108),(3,2,110),(3,2,111),(3,2,113),(3,2,115),(3,3,50),(3,3,51),(3,3,52),(3,3,53),(3,3,60),(3,3,61),(3,3,62),(3,3,63),(3,3,70),(3,3,71),(3,3,94),(3,3,106),(3,3,107),(3,3,110),(3,3,113),(3,3,115),(3,4,0),(3,4,1),(3,4,2),(3,4,11),(3,4,12),(3,4,22),(3,4,23),(3,4,24),(3,4,30),(3,4,31),(3,4,43),(3,4,47),(3,4,65),(3,4,69),(3,4,74),(3,4,75),(3,4,80),(3,4,84),(3,4,85),(3,4,86),(3,4,90),(3,4,106),(3,4,107),(3,4,109),(3,4,116),(3,5,0),(3,5,1),(3,5,2),(3,5,6),(3,5,9),(3,5,13),(3,5,15),(3,5,22),(3,5,23),(3,5,24),(3,5,43),(3,5,47),(3,5,65),(3,5,69),(3,5,74),(3,5,75),(3,5,76),(3,5,80),(3,5,83),(3,5,84),(3,5,85),(3,5,86),(3,5,94),(3,5,106),(3,5,107),(3,5,108),(3,5,109),(3,6,1),(3,6,7),(3,6,21),(3,6,22),(3,6,23),(3,6,27),(3,6,43),(3,6,47),(3,6,65),(3,6,68),(3,6,106),(3,6,107),(3,6,111),(3,6,116),(3,7,0),(3,7,1),(3,7,2),(3,7,9),(3,7,21),(3,7,22),(3,7,23),(3,7,27),(3,7,43),(3,7,47),(3,7,65),(3,7,68),(3,7,85),(3,7,89),(3,7,106),(3,7,107),(3,7,108),(3,7,111),(3,8,1),(3,8,7),(3,8,11),(3,8,12),(3,8,23),(3,8,28),(3,8,42),(3,8,43),(3,8,47),(3,8,51),(3,8,52),(3,8,55),(3,8,57),(3,8,65),(3,8,84),(3,8,85),(3,8,86),(3,8,107),(3,8,109),(3,9,1),(3,9,7),(3,9,13),(3,9,15),(3,9,23),(3,9,28),(3,9,42),(3,9,43),(3,9,47),(3,9,53),(3,9,54),(3,9,70),(3,9,84),(3,9,85),(3,9,86),(3,9,90),(3,9,93),(3,9,107),(3,9,109)],
+    3: [(0,0,11),(0,0,15),(0,0,29),(0,0,33),(0,0,38),(0,0,43),(0,1,47),(0,1,51),(0,1,91),(0,1,93),(0,2,20),(0,2,50),(0,2,51),(0,2,52),(0,2,58),(0,2,60),(0,3,19),(0,3,20),(0,3,21),(0,3,24),(0,3,25),(0,3,50),(0,3,51),(0,3,58),(0,4,0),(0,4,6),(0,4,17),(0,4,22),(0,4,30),(0,4,31),(0,4,84),(0,4,90),(0,4,96),(0,4,107),(0,4,112),(0,5,0),(0,5,10),(0,5,12),(0,5,22),(0,5,84),(0,5,94),(0,5,101),(0,5,107),(0,5,112),(0,6,0),(0,6,6),(0,6,23),(0,6,28),(0,6,65),(0,6,69),(0,7,0),(0,7,10),(0,7,23),(0,7,28),(0,7,65),(0,7,69),(0,8,1),(0,8,7),(0,8,23),(0,8,28),(0,8,43),(0,8,49),(0,8,65),(0,8,69),(0,9,1),(0,9,7),(0,9,23),(0,9,28),(0,9,43),(0,9,49),(0,9,65),(0,9,69),(0,21,1),(0,21,2),(0,21,3),(0,21,12),(0,21,16),(0,21,17),(0,21,18),(0,21,20),(0,21,21),(0,21,26),(0,21,27),(0,21,28),(0,21,30),(0,21,31),(0,21,34),(0,21,35),(0,21,47),(0,21,54),(0,21,55),(0,21,56),(0,21,57),(0,21,58),(0,21,63),(0,21,67),(0,21,68),(0,21,69),(0,21,85),(0,21,86),(0,21,87),(0,21,88),(0,21,89),(0,21,92),(0,21,93),(0,21,94),(0,21,97),(0,21,98),(0,21,99),(1,2,50),(1,2,52),(1,2,60),(1,3,50),(1,4,0),(1,4,1),(1,4,3),(1,4,22),(1,4,23),(1,4,25),(1,4,43),(1,4,47),(1,4,65),(1,4,69),(1,4,84),(1,4,85),(1,4,87),(1,4,107),(1,4,112),(1,5,0),(1,5,1),(1,5,3),(1,5,6),(1,5,9),(1,5,22),(1,5,23),(1,5,25),(1,5,29),(1,5,30),(1,5,43),(1,5,47),(1,5,65),(1,5,69),(1,5,84),(1,5,85),(1,5,87),(1,5,90),(1,5,93),(1,5,107),(1,5,112),(1,6,0),(1,6,1),(1,6,3),(1,6,23),(1,6,28),(1,6,43),(1,6,47),(1,6,65),(1,6,69),(1,6,85),(1,6,89),(1,7,0),(1,7,1),(1,7,3),(1,7,6),(1,7,9),(1,7,23),(1,7,28),(1,7,43),(1,7,47),(1,7,65),(1,7,69),(1,7,85),(1,7,89),(1,8,43),(1,8,49),(1,8,65),(1,8,69),(1,8,85),(1,8,89),(1,9,65),(1,9,69),(1,9,85),(1,9,89),(1,21,41),(1,21,42),(1,21,43),(1,21,44),(1,21,46),(1,21,47),(1,21,48),(1,21,49),(1,21,51),(1,21,52),(1,21,53),(1,21,54),(1,21,56),(1,21,57),(1,21,58),(1,21,59),(1,21,90),(1,21,91),(1,21,92),(1,21,93),(1,21,94),(1,21,95),(1,21,96),(1,21,97),(1,21,98),(1,21,99),(1,21,100),(1,21,101),(1,21,102),(1,21,103),(1,21,104),(1,21,105),(1,21,106),(1,21,107),(1,21,108),(1,21,109),(1,21,110),(1,21,111),(1,21,112),(1,21,113),(1,21,114),(1,21,115),(1,21,116),(1,21,117),(1,21,118),(1,21,119),(2,2,61),(2,2,62),(2,2,63),(2,2,68),(2,2,71),(2,3,61),(2,3,62),(2,3,68),(2,4,1),(2,4,7),(2,4,23),(2,4,28),(2,4,32),(2,4,33),(2,4,43),(2,4,46),(2,4,65),(2,4,68),(2,4,85),(2,4,91),(2,4,107),(2,4,111),(2,5,1),(2,5,7),(2,5,23),(2,5,28),(2,5,38),(2,5,41),(2,5,43),(2,5,46),(2,5,65),(2,5,68),(2,5,85),(2,5,91),(2,5,107),(2,5,111),(2,6,1),(2,6,7),(2,6,21),(2,6,22),(2,6,23),(2,6,29),(2,6,43),(2,6,46),(2,6,65),(2,6,68),(2,6,85),(2,6,88),(2,7,1),(2,7,7),(2,7,21),(2,7,22),(2,7,23),(2,7,31),(2,7,43),(2,7,46),(2,7,65),(2,7,68),(2,7,85),(2,7,88),(2,8,0),(2,8,1),(2,8,8),(2,8,9),(2,8,10),(2,8,21),(2,8,22),(2,8,23),(2,8,29),(2,8,42),(2,8,43),(2,8,44),(2,8,65),(2,8,68),(2,8,85),(2,8,88),(2,9,0),(2,9,1),(2,9,8),(2,9,21),(2,9,22),(2,9,23),(2,9,31),(2,9,42),(2,9,43),(2,9,44),(2,9,48),(2,9,51),(2,9,65),(2,9,68),(2,9,85),(2,9,88),(2,21,0),(2,21,1),(2,21,2),(2,21,3),(2,21,4),(2,21,5),(2,21,6),(2,21,7),(2,21,8),(2,21,9),(2,21,10),(2,21,11),(2,21,12),(2,21,13),(2,21,14),(2,21,15),(2,21,16),(2,21,17),(2,21,18),(2,21,19),(2,21,20),(2,21,21),(2,21,22),(2,21,23),(2,21,24),(2,21,25),(2,21,26),(2,21,27),(2,21,28),(2,21,29),(2,21,30),(2,21,31),(2,21,32),(2,21,33),(2,21,34),(2,21,35),(2,21,36),(2,21,37),(2,21,38),(2,21,39),(2,21,40),(2,21,41),(2,21,42),(2,21,43),(2,21,44),(2,21,45),(2,21,46),(2,21,47),(2,21,48),(2,21,49),(3,2,40),(3,2,48),(3,2,50),(3,2,61),(3,2,94),(3,2,95),(3,2,96),(3,2,106),(3,2,107),(3,2,108),(3,2,110),(3,2,111),(3,2,113),(3,2,115),(3,3,50),(3,3,51),(3,3,52),(3,3,53),(3,3,60),(3,3,61),(3,3,62),(3,3,63),(3,3,70),(3,3,71),(3,3,94),(3,3,106),(3,3,107),(3,3,110),(3,3,113),(3,3,115),(3,4,0),(3,4,1),(3,4,2),(3,4,11),(3,4,12),(3,4,22),(3,4,23),(3,4,24),(3,4,30),(3,4,31),(3,4,43),(3,4,47),(3,4,65),(3,4,69),(3,4,74),(3,4,75),(3,4,80),(3,4,84),(3,4,85),(3,4,86),(3,4,90),(3,4,106),(3,4,107),(3,4,109),(3,4,116),(3,5,0),(3,5,1),(3,5,2),(3,5,6),(3,5,9),(3,5,13),(3,5,15),(3,5,22),(3,5,23),(3,5,24),(3,5,43),(3,5,47),(3,5,65),(3,5,69),(3,5,74),(3,5,75),(3,5,76),(3,5,80),(3,5,83),(3,5,84),(3,5,85),(3,5,86),(3,5,94),(3,5,106),(3,5,107),(3,5,108),(3,5,109),(3,6,1),(3,6,7),(3,6,21),(3,6,22),(3,6,23),(3,6,27),(3,6,43),(3,6,47),(3,6,65),(3,6,68),(3,6,106),(3,6,107),(3,6,111),(3,6,116),(3,7,0),(3,7,1),(3,7,2),(3,7,9),(3,7,21),(3,7,22),(3,7,23),(3,7,27),(3,7,43),(3,7,47),(3,7,65),(3,7,68),(3,7,85),(3,7,89),(3,7,106),(3,7,107),(3,7,108),(3,7,111),(3,8,1),(3,8,7),(3,8,11),(3,8,12),(3,8,23),(3,8,28),(3,8,42),(3,8,43),(3,8,47),(3,8,51),(3,8,52),(3,8,55),(3,8,57),(3,8,65),(3,8,84),(3,8,85),(3,8,86),(3,8,107),(3,8,109),(3,9,1),(3,9,7),(3,9,13),(3,9,15),(3,9,23),(3,9,28),(3,9,42),(3,9,43),(3,9,47),(3,9,53),(3,9,54),(3,9,70),(3,9,84),(3,9,85),(3,9,86),(3,9,90),(3,9,93),(3,9,107),(3,9,109)],
+}
+
+# col->site index for the 4 bottom BPLLs
+_BPLL_SITE_BY_COL = {28:0, 32:1, 146:2, 150:3}
+
+_BPLL_BASE_BITS_BY_VCO = {
+    900:  _BPLL_BASE_BITS_VCO900,
+    1200: _BPLL_BASE_BITS,
+}
+
+def bpll_base_for_vco(fclkin_mhz, idiv, fbdiv, mdiv):
+    """Return the BPLL base-bit list for the VCO this config produces (UG306E: Fvco=Fclkin/IDIV*MDIV,
+    internal feedback FBDIV folds into the loop but not the VCO band here).  Exact-VCO match required
+    (the base is a measured calibration, not interpolable); falls back to the VCO=1200 base with the
+    nearest-band caveat if an unfuzzed VCO is requested."""
+    vco = round(fclkin_mhz / idiv * mdiv)
+    if vco in _BPLL_BASE_BITS_BY_VCO:
+        return _BPLL_BASE_BITS_BY_VCO[vco]
+    # nearest fuzzed band (loop-filter is close within a band; log so the user knows it's approximate)
+    nearest = min(_BPLL_BASE_BITS_BY_VCO, key=lambda v: abs(v - vco))
+    return _BPLL_BASE_BITS_BY_VCO[nearest]
+
+
+_BPLL_DIV_TABLE = {
+    (1, 1, 16): {33, 42, 44, 13, 14, 15, 84, 23, 24, 25},
+    (1, 1, 13): {33, 44, 13, 14, 15, 80, 81, 84, 23, 24, 25},
+    (1, 1, 14): {33, 41, 44, 13, 14, 15, 81, 84, 23, 24, 25},
+    (1, 1, 15): {33, 42, 44, 13, 14, 15, 80, 84, 23, 24, 25},
+    (1, 1, 17): {33, 41, 42, 44, 13, 14, 15, 80, 81, 82, 83, 23, 24, 25},
+    (1, 1, 18): {33, 43, 44, 13, 14, 15, 81, 82, 83, 23, 24, 25},
+    (1, 1, 19): {33, 43, 44, 13, 14, 15, 80, 82, 83, 23, 24, 25},
+    (1, 1, 20): {33, 41, 43, 44, 13, 14, 15, 82, 83, 23, 24, 25},
+    (1, 1, 21): {33, 42, 43, 44, 13, 14, 15, 80, 81, 83, 23, 24, 25},
+    (1, 1, 22): {33, 41, 42, 43, 44, 13, 14, 15, 81, 83, 23, 24, 25},
+    (1, 1, 23): {33, 41, 42, 43, 44, 13, 14, 15, 80, 83, 23, 24, 25},
+    (1, 1, 24): {33, 13, 14, 15, 45, 83, 23, 24, 25},
+    (1, 1, 25): {33, 41, 13, 14, 15, 45, 80, 81, 82, 23, 24, 25},
+    (1, 1, 26): {33, 41, 13, 14, 15, 45, 81, 82, 23, 24, 25},
+    (1, 1, 32): {33, 42, 44, 13, 14, 15, 23, 24, 25},
+    (1, 2, 16): {33, 42, 44, 13, 14, 15, 84, 24, 25},
+    (1, 4, 16): {33, 42, 43, 13, 14, 15, 45, 84, 25},
+    (1, 8, 16): {33, 43, 44, 13, 14, 15, 84, 61},
+    (1, 3, 6): {33, 43, 44, 13, 14, 15, 81, 83, 84, 23, 25},
+    (1, 5, 5): {33, 41, 13, 14, 15, 45, 80, 81, 83, 84, 23, 24},
+    (1, 6, 4): {33, 13, 14, 15, 45, 82, 83, 84, 24},
+    (1, 7, 3): {33, 42, 43, 44, 13, 14, 15, 80, 82, 83, 84, 23},
+    (3, 1, 16): {32, 42, 44, 13, 15, 84, 23, 24, 25},
+    (4, 1, 20): {33, 41, 43, 44, 15, 82, 83, 23, 24, 25},
+    (5, 1, 26): {33, 41, 13, 14, 45, 81, 82, 23, 24, 25},
+    (2, 2, 16): {32, 33, 42, 43, 45, 14, 15, 84, 24, 25},
+}
+
+# BPLL port -> (logic wire idx in PllIn/PllOut tables, table). Mirrors
+# _plla_inputs / _plla_outputs but only the DDR3 subset we route.
+_bpll_inputs = [(4, 'CLKIN'), (5, 'CLKFB'), (0, 'RESET'), (101, 'PLLPWD')]
+_bpll_outputs = [(1, 'LOCK'), (10, 'CLKOUT0'), (11, 'CLKOUT1'), (12, 'CLKOUT2'),
+                 (13, 'CLKOUT3'), (14, 'CLKOUT4'), (15, 'CLKOUT5'), (16, 'CLKOUT6')]
+
+# GW5AST-138C has 4 bottom-edge BPLL head tiles (ttyp 182), 0-based head cols.
+# Confirmed by placing all 12 PLLs (hdl/test-a/pll12_top.v) + unpacking: BPLL outputs
+# land at 1-based C29/C33/C147/C151 => head cols (out_col-1) = 28/32/146/150.
+_BPLL_HEAD_COLS = [28, 32, 146, 150]
+
+def fse_create_bottom_plls(dev, device, fse, dat):
+    """GW5AST-138C bottom-edge PLL bels (4x) + portmap + pad_pll + static bit-table.
+
+    Models the main-grid `PLL` bels at head tiles R108C{28,32,146,150} (ttyp 182), each
+    with its 3 companion tiles. NOT the GW5A-25A slot-PLLA machinery.
+    """
+    if device not in {'GW5AST-138C'}:
+        return
+    for _bpll_head_col in _BPLL_HEAD_COLS:
+        _fse_create_one_bottom_pll(dev, device, fse, dat, 108, _bpll_head_col)
+
+def _fse_create_one_bottom_pll(dev, device, fse, dat, row, col):
+    """Build ONE bottom BPLL bel at (row, col).  Node/alias names are column-qualified
+    (X{col}Y{row}/ prefix) so the 4 instances don't collide."""
+    extra = dev.extra_func.setdefault((row, col), {})
+    bpll = extra.setdefault('bpll', {})
+    # Companion tiles, indexed 0..3 == C146..C149, for gowin_pack fuse placement.
+    bpll['tiles'] = [(row, col), (row, col + 1), (row, col + 2), (row, col + 3)]
+    # Static, gw_sh-validated config bit-table (baked into the chipdb).
+    bpll['bit_table'] = {
+        'row': _BPLL_ROW,
+        'div_cols': list(_BPLL_DIV_COLS),
+        'div_table': {f'{i},{f},{m}': sorted(v) for (i, f, m), v in _BPLL_DIV_TABLE.items()},
+        'base_bits': [list(t) for t in _BPLL_BASE_BITS],
+        # VCO-keyed base bits (the analog CP+LPF+VCO block is VCO-specific); gowin_pack selects by
+        # the computed VCO so non-1200 configs (e.g. the L96 ring's VCO=900) emit a locking PLL.
+        # The VCO=900 base is PER-SITE (each of the 4 BPLLs has a few site-specific clkin/route bits,
+        # measured separately and gw_sh-bit-exact); VCO=1200 uses the shared baked base.
+        'base_by_vco': {
+            '900':  [list(t) for t in _BPLL_BASE_VCO900_BY_SITE[_BPLL_SITE_BY_COL[col]]],
+            '1200': [list(t) for t in _BPLL_BASE_BITS],
+        },
+        'clkin_path': [list(t) for t in _BPLL_CLKIN_PATH_BITS],
+        'odiv_therm': {str(k): list(v) for k, v in _BPLL_ODIV_THERM.items()},
+        'clkout_en_col': {str(k): list(v) for k, v in _BPLL_CLKOUT_EN_COL.items()},
+    }
+
+    wt = wnames.wirenames
+    # Bare tile-local wire names (BPLL<nam>...); the per-site Himbaechel node keys all carry
+    # an X<col>Y<row>/ coordinate prefix, so the 4 head tiles never collide.  (The bel input
+    # CLK0/CLK2/C4/C5 wires live in the companion tile col+dlt, reached via an aliased node.)
+    inputs = bpll.setdefault('inputs', {})
+    for idx, nam in _bpll_inputs:
+        wire_idx = dat.gw5aStuff['PllIn'][idx]
+        dlt = dat.gw5aStuff['PllInDlt'][idx]
+        if wire_idx is None or wire_idx < 0:
+            continue
+        wire = wt[wire_idx]
+        wrow, wcol = row, col + dlt
+        if wcol == col:
+            inputs[nam] = wire
+        else:
+            alias = f'BPLL{nam}{wire}'
+            inputs[nam] = alias
+            dev.nodes.setdefault(f'X{col}Y{row}/{alias}', ('PLL_I', {(row, col, alias)}))[1].add((wrow, wcol, wire))
+
+    # Which uniform-spine clock-MUX entry this head tile drives.  The GW5AST clock MUX
+    # (center tiles) accepts B[LR]PLL0CLK0..3 from the two bottom PLLs; head tiles left of
+    # center share BLPLL0, those right of center share BRPLL0 (the silicon has exactly 2
+    # bottom spine entries, each with 4 clocks -> only CLKOUT0..3 reach the global spine).
+    spine_side = 'BL' if col < dat.grid.center_x - 1 else 'BR'
+    # Measured (impl/fuzz/pll_matrix): PLL_B2 (col 146) -> BRPLL0, PLL_B3 (col 150) -> BLPLL0.
+    # PLL_B0/B1 reached no PLL spine source in those builds; they keep the column rule.
+    spine_side = {150: 'BL'}.get(col, spine_side)
+
+    outputs = bpll.setdefault('outputs', {})
+    for idx, nam in _bpll_outputs:
+        wire_idx = dat.gw5aStuff['PllOut'][idx]
+        dlt = dat.gw5aStuff['PllOutDlt'][idx]
+        if wire_idx is None or wire_idx < 0:
+            continue
+        wire = wt[wire_idx]
+        wrow, wcol = row, col + dlt
+        # The bel output is the bare tile-local wire BPLLOUT<nam> at this head tile; the
+        # R<row>C<col>/ tile prefix keeps the 4 sites distinct, no column-qualifier needed.
+        outputs[nam] = f'BPLLOUT{nam}'
+        dev.wire_delay[outputs[nam]] = 'X0'
+        logic_wire = wire if wcol == col else f'BPLL{nam}{wire}'
+        # CLKOUT0..3 enter the uniform global-clock spine MUX via the B[LR]PLL0CLK<n> node
+        # (already wired to every SPINE in the center mux tiles).  Tie this site's output
+        # wire into that node so dedicated clock routing can reach the spine from ANY of the
+        # 4 head tiles.  CLKOUT4..6 / LOCK have no spine entry -> tile-local PLL_O node only.
+        m = re.match(r'CLKOUT([0-3])$', nam)
+        if m:
+            spine_node = f'{spine_side}PLL0CLK{m.group(1)}'
+            dev.nodes.setdefault(spine_node, ('GLOBAL_CLK', set()))[1].add((row, col, outputs[nam]))
+        else:
+            dev.nodes.setdefault(f'X{col}Y{row}/BPLL{nam}', ('PLL_O', set()))[1].add((row, col, outputs[nam]))
+        if wcol != col:
+            dev.nodes.setdefault(f'X{col}Y{row}/{logic_wire}', ('PLL_O', set()))[1].add((row, col, logic_wire))
+            dev.nodes.setdefault(f'X{col}Y{row}/{logic_wire}', ('PLL_O', set()))[1].add((wrow, wcol, wire))
+        dev[row, col].pips.setdefault(logic_wire, {}).update({outputs[nam]: set()})
+
+    # pad_pll: map the dedicated BPLL clock input pin(s) to this bel so nextpnr's
+    # pack_pll can bind the PLL directly when CLKIN is driven by that pad. Format
+    # matches _pll_pads: (row, col, pll_pin_type, bel_name). dev.io_cfg is filled
+    # later in the builder, so the actual pin->bel mapping is finalized there in
+    # fill_bottom_pll_pads(); here we only guarantee the bel/portmap/bit-table.
+
+# GW5AST-138C left/right edge PLLs that feed the TOP fabric half (rows 0..54) via the
+# TL0/TR0 spine groups. The 4 bottom PLLs only reach the bottom half, so these are
+# REQUIRED to clock the whole fabric. Top-area sites only (rows < center): head tile +
+# 2 horizontal companions. Fuse tables silicon-measured (gw5ast_lr_pll, fixed 45MHz config).
+# (row, head_col, spine_side). LEFT head ttyp 74, RIGHT head ttyp 77.
+# GW5AST-138C left/right edge PLL sites. Per SITE_ENUMERATION.md (12-instance placement
+# fuzz + grid ttyp analysis, datasheet-confirmed 4 left + 4 right): each is a 3-tile
+# horizontal head group. Coordinates are GRID-VERIFIED from the fse ttyp map (74/75=LEFT
+# head, 77=RIGHT head, companions at +1/+2):
+#   LEFT  head col 1  @ rows 27/45/63/81 (ttyp 74@27,81; 75@45,63 -- both heads at col 1)
+#   RIGHT head col 177@ rows 27/81, col 178@ rows 45/63 (rightward 3-tile group fits 182-col grid)
+# SITE_ENUMERATION.md's (45,0)/(45,181)/(63,181) were imprecise; the grid dump shows the
+# ttyp-77/74 HEAD tiles are at the columns below.
+#   (row, head_col, side, pll_idx)
+#     side    : 'TL'/'TR' -> the spine-group prefix (TLPLL / TRPLL) these top-area sites feed.
+#     pll_idx : which of the side's TWO spine groups (PLL0 or PLL1) this site drives.
+# The clock spine exposes exactly TLPLL{0,1}CLK{0..3} + TRPLL{0,1}CLK{0..3} (clknames_5ast138c),
+# i.e. 2 groups per side for 4 sites/side. Site->group assignment (pll_idx) is the current
+# hypothesis (rows 27/45 -> group 0, rows 63/81 -> group 1); the 8-site spine fuzz
+# (fuzz_lr_pll_spine.sh) confirms per-site placement is distinct in the bitstream.
+# Rows 45/63: the IDIV/FBDIV PLL table is on col 0 (ttyp 268/270), companions 75/76 at cols 1/2.
+# pll_idx measured from one-PLL-per-site gw_sh builds with CLOCK_LOC BUFG on CLKOUT0..3
+# (sbp-computational impl/fuzz/pll_matrix): L0/L2 -> TLPLL0, L1/L3 -> TLPLL1, R0/R2 -> TRPLL0,
+# R1/R3 -> TRPLL1.
+_LRPLL_SITES = [
+    (27,   1, 'TL', 0), (45,   0, 'TL', 1),
+    (63,   0, 'TL', 0), (81,   1, 'TL', 1),
+    (27, 177, 'TR', 0), (45, 178, 'TR', 1),
+    (63, 178, 'TR', 0), (81, 177, 'TR', 1),
+]
+
+def fse_create_lr_plls(dev, device, fse, dat):
+    """GW5AST-138C top-area left/right PLL bels (8x) feeding TLPLL{0,1}/TRPLL{0,1} spine groups.
+
+    All 8 datasheet L/R PLL sites (4 left + 4 right) are modeled. Each reuses the bottom-PLL
+    'bpll' extra_func schema (gowin_pack.set_bpll_attrs) with L/R geometry (3 tiles, config
+    row 20). Node/spine names are qualified per (side, pll_idx, row, col) so the 8 instances
+    never collide."""
+    if device not in {'GW5AST-138C'}:
+        return
+    for row, col, side, pll_idx in _LRPLL_SITES:
+        base = gw5ast_lr_pll._LPLL_BASE_BITS if side == 'TL' else gw5ast_lr_pll._RPLL_BASE_BITS
+        divc = gw5ast_lr_pll._LPLL_DIV_1_1_18 if side == 'TL' else gw5ast_lr_pll._RPLL_DIV_1_1_18
+        _fse_create_one_lr_pll(dev, dat, row, col, side, pll_idx, base, divc)
+
+def _fse_create_one_lr_pll(dev, dat, row, col, side, pll_idx, base_bits, div_cols):
+    """Build ONE L/R PLL bel at (row, col). Reuses the bottom-PLL extra_func['bpll']
+    schema so gowin_pack.set_bpll_attrs handles it unchanged; only the geometry (3 tiles,
+    config row 20) and spine group ({side}PLL{pll_idx}) differ.
+
+    All node names carry an X{col}Y{row}/ coordinate prefix so the 8 L/R sites never collide,
+    and the spine node is {side}PLL{pll_idx}CLK<n> (parameterized, not the old hardcoded PLL0)."""
+    extra = dev.extra_func.setdefault((row, col), {})
+    bpll = extra.setdefault('bpll', {})
+    # 3-tile horizontal group (head + 2 companions), unlike the bottom edge's 4.
+    bpll['tiles'] = [(row, col), (row, col + 1), (row, col + 2)]
+    lr_div_table = {f'{i},{f},{m}': sorted(v) for (i, f, m), v in _BPLL_DIV_TABLE.items()}
+    lr_div_table['1,1,18'] = sorted(div_cols)
+    lr_div_table['1,1,16_vco800'] = [13, 14, 15, 23, 24, 25, 33, 40, 60, 84]
+    # Strip hardcoded ODIV0=20 ((0,20,90..96)) and CLKOUT0_EN ((1,20,60)) from base_bits
+    # so set_bpll_attrs encodes ODIV0..6 and CLKOUT0..6_EN dynamically.
+    clean_base = [
+        list(t) for t in base_bits
+        if not (t[0] == 0 and t[1] == 20 and 90 <= t[2] <= 96)
+        and not (t[0] == 1 and t[1] == 20 and t[2] == 60)
+    ]
+    bpll['bit_table'] = {
+        'row': 20,                       # L/R divider register row (bottom uses 21)
+        'div_cols': list(_BPLL_DIV_COLS),
+        'div_table': lr_div_table,
+        'base_bits': clean_base,
+        'clkin_path': [],
+        'odiv_therm': {str(k): list(v) for k, v in _BPLL_ODIV_THERM.items()},
+        'clkout_en_col': {str(k): list(v) for k, v in _BPLL_CLKOUT_EN_COL.items()},
+    }
+
+    wt = wnames.wirenames
+    inputs = bpll.setdefault('inputs', {})
+    for idx, nam in _bpll_inputs:
+        wire_idx = dat.gw5aStuff['PllIn'][idx]
+        dlt = dat.gw5aStuff['PllInDlt'][idx]
+        if wire_idx is None or wire_idx < 0:
+            continue
+        wire = wt[wire_idx]
+        wrow, wcol = row, col + dlt
+        if wcol == col:
+            inputs[nam] = wire
+        else:
+            alias = f'{side}PLL{nam}{wire}'
+            inputs[nam] = alias
+            dev.nodes.setdefault(f'X{col}Y{row}/{alias}', ('PLL_I', {(row, col, alias)}))[1].add((wrow, wcol, wire))
+
+    # CLKOUT0..3 enter the global spine via this site's {side}PLL{pll_idx} group. The clock
+    # spine exposes TLPLL{0,1}CLK<n> + TRPLL{0,1}CLK<n> (clknames_5ast138c): 2 groups per side,
+    # so pll_idx selects which one. (Same mechanism the bottom edge uses for BL/BR PLL0.)
+    outputs = bpll.setdefault('outputs', {})
+    for idx, nam in _bpll_outputs:
+        wire_idx = dat.gw5aStuff['PllOut'][idx]
+        dlt = dat.gw5aStuff['PllOutDlt'][idx]
+        if wire_idx is None or wire_idx < 0:
+            continue
+        wire = wt[wire_idx]
+        wrow, wcol = row, col + dlt
+        # Bel-output wire is tile-local (bare name), distinct per head tile -> no cross-site
+        # collision even unqualified. Only the spine + PLL_O NODE keys need qualifying (below).
+        outputs[nam] = f'BPLLOUT{nam}'
+        dev.wire_delay[outputs[nam]] = 'X0'
+        logic_wire = wire if wcol == col else f'{side}PLL{nam}{wire}'
+        m = re.match(r'CLKOUT([0-3])$', nam)
+        if m:
+            spine_node = f'{side}PLL{pll_idx}CLK{m.group(1)}'
+            dev.nodes.setdefault(spine_node, ('GLOBAL_CLK', set()))[1].add((row, col, outputs[nam]))
+        else:
+            dev.nodes.setdefault(f'X{col}Y{row}/{side}PLL{nam}', ('PLL_O', set()))[1].add((row, col, outputs[nam]))
+        if wcol != col:
+            dev.nodes.setdefault(f'X{col}Y{row}/{logic_wire}', ('PLL_O', set()))[1].add((row, col, logic_wire))
+            dev.nodes.setdefault(f'X{col}Y{row}/{logic_wire}', ('PLL_O', set()))[1].add((wrow, wcol, wire))
+        dev[row, col].pips.setdefault(logic_wire, {}).update({outputs[nam]: set()})
 
 # DHCEN (as I imagine) is an additional control input of the HCLK input
 # multiplexer. We have four input multiplexers - HCLK_IN0, HCLK_IN1, HCLK_IN2,
@@ -2508,6 +3464,14 @@ def fse_iologic(device, fse, ttyp):
             bels['OSER16'] = Bel()
             bels['IDES16'] = Bel()
     if device in {'GW1N-9', 'GW1N-9C'} and ttyp in {52, 66, 63, 91, 92}:
+            bels['OSER16'] = Bel()
+            bels['IDES16'] = Bel()
+    if device in {'GW5AST-138C'} and ttyp in {245, 246}:
+            # See fse_create_io16's GW5AST-138C branch: OSER16/IDES16 DO exist on this device
+            # (silicon-confirmed via the vendor USB HS soft-PHY IP), grid-verified at ttyp 245/246
+            # (right edge, col dev.cols-1). This Bel() creation is the OTHER half of that fix --
+            # dat_portmap() (below, name.startswith("OSER16")/("IDES16")) fills in the real portmap
+            # generically from the .dat wire tables once these exist, same as every other device.
             bels['OSER16'] = Bel()
             bels['IDES16'] = Bel()
     return bels
@@ -3011,6 +3975,16 @@ def fse_create_5a138_clocks(dev, device, dat: Datfile, fse):
     center_col = dat.grid.center_x - 1
     center_row = dat.grid.center_y
     row_range = [range(center_row), range(center_row, dev.rows)]
+
+    # Measured (impl/fuzz/pll_spine_observed.json, vendor builds): B[LR]PLL0CLK0..3 only ever
+    # reach SPINE16..21 (one single-sample exception BLPLL0CLK2->SPINE8 ignored).  The fse offers
+    # SPINE8..13 too, but routing there broke USB CDC on hardware, so drop those bottom-PLL pips.
+    for r in range(dev.rows):
+        for c in range(dev.cols):
+            for dest, srcs in dev[r, c].clock_pips.items():
+                if dest.startswith('SPINE') and 8 <= int(dest[5:]) <= 13:
+                    for src in [w for w in srcs if w.startswith(('BLPLL', 'BRPLL'))]:
+                        del srcs[src]
 
     # create each half of the clock wires
     for half in range(2):
@@ -3566,7 +4540,18 @@ _segment_data = {
                           [None, None, None, None, None, None, None, ('B6', 'B7'), None],],
                      'skip_region_func': _60k_skip_region, 'get_seg_func': _60k_get_seg,
                      'reserved_wires': {}
-                     }
+                     },
+        # GW5AST-138C: mux rows 0, 9, ..., 99, 108 (LT02/LT13 at rows 0/108, LT00/LT10/LT20/LT30 at the
+        # inner rows), 12 strips. tap_start measured with `gowin_unpack --lw` over 83 vendor bitstreams
+        # (impl/fuzz/lw_report.json in sbp-computational). Gate wires from the chipdb mux sources.
+        'GW5AST-138C': {'tap_start': [2, 1, 0, 3],
+                     'rows': [(0, 9)] + [(r + 1, r + 9) for r in range(9, 100, 9)],
+                     'top_wires': [('LT02', 'LT13')] + [('LT00', 'LT10')] * 11,
+                     'bottom_wires': [('LT20', 'LT30')] * 11 + [('LT02', 'LT13')],
+                     'top_gate_wires':    [[('A6', 'A7')] + [('A6', 'B6')] * 11, [('B6', 'B7')] + [None] * 11],
+                     'bottom_gate_wires': [[('A7', 'B7')] * 11 + [('A6', 'A7')], [None] * 11 + [('B6', 'B7')]],
+                     'skip_region_func': (lambda t, b, c: False), 'get_seg_func': _common_get_seg,
+                     'reserved_wires': {}},
         }
 def create_segments(dev, device):
     if device not in _segment_data:
@@ -3851,6 +4836,23 @@ def fse_create_io16(dev, device):
             if i < 17:
                 df.setdefault((i, dev.cols - 1), {})['io16'] = {'role': 'MAIN', 'pair': (1, 0)}
                 df.setdefault((i + 1, dev.cols - 1), {})['io16'] = {'role': 'AUX', 'pair': (-1, 0)}
+    elif device in {'GW5AST-138C'}:
+        # OSER16/IDES16 DO exist on GW5AST-138C -- the earlier "only in three chips, doesn't exist
+        # in the latest series" note above was true for the fuzzed devices at the time but wrong for
+        # this one: the vendor's own USB2.0 HS soft-PHY IP (ipcore/USBTwoSoftPHY, de-vendored via
+        # gw_sh -u.vg, see hdl/usb2-soft-console/fuzz_softphy/) instantiates one OSER16 (tx bit
+        # serializer) and one IDES16 (unused by this IP variant but the primitive is present) as
+        # part of its HS CDR SerDes. nextpnr placed the vendor's OSER16 at row 79 -> the grid ttyp
+        # there (245) was previously unregistered for io16 (no chipdb entry -> "can not be placed").
+        # Grid-verified (fse['header']['grid'][61]): right edge, col dev.cols-1, ttyp-245 (MAIN,
+        # shortval 21/22 = IOLOGICA/B) at odd rows, ttyp-246 (AUX, same shortval) at row+1, strictly
+        # alternating with bank-boundary gaps every 9 rows (skip 9,10 / 27,28 / 45,46 / 63,64 / 81,82
+        # / 99,100). Every (r, r+1) 245/246 pair checked programmatically -- no exceptions.
+        for i in chain(range(1, 8, 2), range(12, 17, 2), range(19, 26, 2), range(30, 35, 2),
+                       range(37, 44, 2), range(48, 53, 2), range(55, 62, 2), range(66, 71, 2),
+                       range(73, 80, 2), range(84, 89, 2), range(91, 98, 2), range(102, 107, 2)):
+            df.setdefault((i, dev.cols - 1), {})['io16'] = {'role': 'MAIN', 'pair': (1, 0)}
+            df.setdefault((i + 1, dev.cols - 1), {})['io16'] = {'role': 'AUX', 'pair': (-1, 0)}
 
 # (osc-type, devices) : ({local-ports}, {aliases})
 _osc_ports = {('OSCZ', 'GW1NZ-1'): ({}, {'OSCOUT' : (0, 5, 'OF3'), 'OSCEN': (0, 2, 'A6')}),
@@ -3921,8 +4923,7 @@ def get_logic_clock_ins(device, dat: Datfile):
                     if not wnames.clknames[i].startswith('UNK')
                 }]
     elif device in {'GW5AST-138C'}:
-        return [{}, {(160, 108, 91, 125)}] # XXX for now only one gate: BRMDCLK1
-        """
+        # Both halves from the vendor dat (CMuxTopIns/CMuxBotIns, offset 80): 24 gates each.
         return [{
                     (i, dat.gw5aStuff['CMuxTopIns'][i - 80][0] - 1,
                         dat.gw5aStuff['CMuxTopIns'][i - 80][1] - 1,
@@ -3934,7 +4935,6 @@ def get_logic_clock_ins(device, dat: Datfile):
                         dat.gw5aStuff['CMuxBotIns'][i - 80][2])
                     for i in range(wnames.clknumbers['TRBDCLK0'], wnames.clknumbers['TRMDCLK1'] + 1)
                 }]
-        """
     # pre 5a
     return [{
                 (i, dat.cmux_ins[i - 80][0] - 1,
@@ -4563,7 +5563,7 @@ def set_chip_flags(dev, device):
         dev.chip_flags.append("HAS_BANDGAP")
     if device not in {'GW5A-25A', 'GW5AT-60B', 'GW5AST-138C'}:
         dev.chip_flags.append("HAS_PLL_HCLK")
-    if device in {'GW2A-18', 'GW2A-18C'}:
+    if device in {'GW2A-18', 'GW2A-18C', 'GW5AST-138C'}:
         dev.chip_flags.append("HAS_CLKDIV_HCLK")
     if device in {'GW5A-25A'}:
         dev.chip_flags.append("HAS_PINCFG")
@@ -4585,12 +5585,248 @@ def set_chip_flags(dev, device):
         dev.chip_flags.append("HAS_PINCFG")
         dev.chip_flags.append("HAS_DFF67")
         dev.chip_flags.append("HAS_CIN_MUX")
+        dev.chip_flags.append("HAS_5A_HCLK")
         dev.chip_flags.append("NEED_BSRAM_RESET_FIX")
         dev.chip_flags.append("NEED_CFGPINS_INVERSION")
         dev.chip_flags.append("HAS_5A_DSP")
 
     if device in {'GW5A-25A'}:
         dev.dcs_prefix = "CLKIN"
+
+# ── Fuzzed GW5AST-138C hard cells (DQS/SDPB/DCS + DDR-PHY/HDMI) ────────────────
+# Bel locations from gridwalk of fuzz bitstreams (apicula/fuzz/gw5ast/BEL_LOCATIONS.md);
+# param fuses from differential fuzz (FUSES_EXTRACTED.md), expressed TILE-LOCAL.
+# GATED GW5AST-138C ONLY — these coords are silicon-specific to this die (NOT GW5A-25A,
+# which has a different layout).  Stored as a 'fuzzed' extra_func entry: bel tile +
+# per-attr {local (brow, bcol)} fuse sets, ready for gowin_pack to place.
+_GW5AST_FUZZED_CELLS = {
+    # cell: { 'io_tile': (r,c) routing/strobe anchor,  'cfg_tile': (r,c) param-config tile,
+    #         'attrs': { 'PARAM=VAL': [(local_brow, local_bcol, bitpos), ...] } }
+    # Coords from byte-col gridwalk (BEL_LOCATIONS.md) + re-extracted param differentials
+    # (byte frame).  DQS spans tiles: I/O strobe @ (81,5 ttyp241), CONFIG @ (72,0 ttyp64).
+    # DQS: the read-strobe block, one per DDR byte lane.  ttyp-241 = the DQS site (8 on the grid);
+    # registering only the fuzzed io_tile made it a SINGLE-site bel, so a 2-byte-lane DDR3 PHY
+    # (2x DQS) failed with "Unable to place cell 'DQS', no BELs remaining".  sites_ttyp folds all 8.
+    # Left-edge DQS sites (ttyp 257/259) measured by RVALID probes on gw_sh (impl/fuzz/ddr_dll):
+    # group0 IOL4 -> (9,0), group6 IOL94 -> (90,0), group7 IOL96 -> (99,0). Their config attrs are
+    # not fuzzed; the ttyp-241 tile-local offsets below are applied to them unverified.
+    'DQS':  {'io_tile': (81, 5), 'cfg_tile': (72, 0),
+             'sites_ttyp': 241,
+             'sites': [(9, 0), (90, 0), (99, 0)],
+             'attrs': {
+                 'DQS_MODE=X2_DDR3': [(20, 79, 7)],          # vs X4 baseline
+                 'HWL=false':        [(20, 103, 7)],          # vs true
+                 'FIFO_MODE_SEL=1':  [(20, 36, 7), (20, 67, 7)],
+             }},
+    'SDPB': {'io_tile': (99, 161), 'cfg_tile': (99, 161),
+             'attrs': {'READ_MODE=1': [(20, 13, 7), (20, 83, 7)]},   # +mirror @ (99,155)
+             # BSRAM head sites = all ttyp-40 tiles (6 rows 9/27/45/63/81/99, 116 heads);
+             # computed from the grid at fold time via 'sites_ttyp'.  datasheet 340 logical
+             # BSRAM (each block spans multiple tiles); these heads are placeable SDPB bels.
+             'sites_ttyp': 40},
+    'DCS':  {'io_tile': (81, 88), 'cfg_tile': (54, 92),
+             'attrs': {'DCS_MODE=FALLING':
+                       [(20, c, 7) for c in (82, 84, 85, 87, 88, 89, 90)]}},
+    # DSP: MULT27X36/MULT12X12 etc. ttyp-20 = the DSP bel; EXACTLY 298 tiles on rows
+    # 18/36/54/72/90 == datasheet DSP=298 (exact, silicon-validated 164/298 used by fb).
+    'DSP': {'io_tile': (18, 1), 'sites_ttyp': 20},   # io_tile is a real ttyp-20 head (no +1)
+    # bel at (108,0) = the only ttyp-48 tile (carries the vendor DLL0 shortval, decoded from
+    # dqs00.fs IOL109 record); DIV_SEL/SCAL_EN/DLL_FORCE bit coords lie inside tile (0,0).
+    # DDRDLL LOCK fabric exit -> Q0 @ (108,0); STEP[0..7] -> Q0..Q7 @ (108,1)
+    'DDRDLL': {'io_tile': (108, 0), 'cfg_tile': (0, 0),
+               'attrs': {
+                   'DIV_SEL=1':    [(18, 59, 7)],
+                   'SCAL_EN=true': [(19, 72, 7)],
+                   'DLL_FORCE=true': [(19, 61, 7)],
+               }},
+    # IODELAY: C_STATIC_DLY (static delay tap 0..127) is a 7-bit **BINARY-weighted** field —
+    # NOT a thermometer (the earlier note was wrong).  Proven by the 20-point sweep
+    # fuzz/gw5ast/fuzz_ddr_iodelay.sh: the .fs-diff bit COUNT == popcount(value) for every point
+    # (dly1/2/4/8/16/32/64 -> 1 bit each; dly3/6/12 -> 2; dly127 -> all 7, exact match).
+    # Silicon frame: global row 1511, byte-cols 16936..16942, bitpos 7 — 7 CONSECUTIVE byte-cols,
+    # and the LSB sits at the HIGHEST col (16942=weight1 ... 16936=weight64), so the weight order
+    # is REVERSED vs a naive ascending range().  Tile-local: row 20, cols 0..6, bitpos 7.
+    # ttyp-247 = the IODELAY site (48 on the grid).  Registering only the fuzzed io_tile made it a
+    # SINGLE-site bel; the open LiteDRAM GW5DDRPHY instantiates 26 -> "no BELs remaining".
+    'IODELAY': {'io_tile': (108, 141), 'cfg_tile': (108, 141),
+                'sites_ttyp': 247,
+                'attrs': {  # index i = bit weight 2**i; col 6-i (LSB at the highest col)
+                    'C_STATIC_DLY': [(20, 6 - i, 7) for i in range(7)],
+                }},
+    # OSER8_MEM / IDES8_MEM = the DDR write/read 8:1 SerDes (IOLOGIC in MEM-gearing mode).
+    # Fuzzed via the DDRDLL->DQS->{OSER8_MEM,IDES8_MEM} chain (apicula/fuzz/gw5ast/cells/
+    # oser8_mem.v, ides8_mem.v).  gridwalk: the SerDes-unique fuses land on the ttyp-244
+    # IO-logic config tiles (48 of them, the DDR byte-lane IOLOGIC sites on COL 0 ONLY, rows
+    # 2-107 -- col 181 at those rows is ttyp-246/245, NOT another set of ttyp-244 tiles;
+    # grid-verified, corrects an earlier "cols 0/181" comment). co-located with the DQS
+    # strobe anchor @ (81,5 ttyp241).  So both register as placeable bels at ALL ttyp-244
+    # lanes (like SDPB uses sites_ttyp=40 for BSRAM heads).
+    # Param fuses (HWL/TCLK_SOURCE/TXCLK_POL) are differential-extractable later; the bel
+    # LOCATION is what nextpnr needs to place the DDR3 PHY.
+    # OSER8_MEM param fuses are DIFFERENTIAL-EXTRACTED (apicula/fuzz/gw5ast/cells/
+    # oser8_mem_{pol1,hwl1,tclk}.v vs baseline): each variant reduced to ONE bit, then
+    # gridwalked to tile-local in (69,0 ttyp244) — the IDES/OSER MEM-gearing config tile.
+    #   TXCLK_POL=1 -> (5,39)  HWL=true -> (0,95)  TCLK_SOURCE=DQSW -> (11,79)  bitpos 7.
+    'OSER8_MEM': {'io_tile': (81, 5), 'cfg_tile': (69, 0),
+                  'sites_ttyp': 244,
+                  'attrs': {
+                      'TXCLK_POL=1':      [(5, 39, 7)],   # write-clock polarity
+                      'HWL=true':         [(0, 95, 7)],   # half-word-len mode (vs false)
+                      'TCLK_SOURCE=DQSW': [(11, 79, 7)],  # write-strobe: DQSW vs DQSW270
+                  }},
+    # IDES8_MEM has NO sweepable user param (FIFO/DQSR90 read-mux is set by gowin_pack
+    # from mode, not a fixture param), so location-only registration is correct.
+    'IDES8_MEM': {'io_tile': (81, 5), 'cfg_tile': (69, 0),
+                  'sites_ttyp': 244},
+    # OSER4_MEM / IDES4_MEM = the 1:2-ratio (4:1) DDR write/read SerDes the OPEN LiteDRAM
+    # GW5DDRPHY instantiates (vs the -8 the encrypted vendor IP used).  Fuzzed 2026-07-10 via the
+    # same DDRDLL->DQS chain (apicula/fuzz/gw5ast/cells/oser4_mem.v, ides4_mem.v); the -4 variants
+    # occupy the SAME ttyp-244 IOLOGIC gearing sites as the -8 (co-located @ (81,5) DQS anchor),
+    # so they reuse the -8 cfg_tile + the same gearing param fuses.  Validated: the open DDR3 .fs
+    # (buzzy-fuzzy/openddr_bels/openddr_ddr3only.fs) places 20 OSER4_MEM + 16 IDES4_MEM.
+    'OSER4_MEM': {'io_tile': (81, 5), 'cfg_tile': (69, 0),
+                  'sites_ttyp': 244,
+                  'attrs': {
+                      'TXCLK_POL=1':      [(5, 39, 7)],
+                      'TCLK_SOURCE=DQSW': [(11, 79, 7)],
+                  }},
+    'IDES4_MEM': {'io_tile': (81, 5), 'cfg_tile': (69, 0),
+                  'sites_ttyp': 244},
+    # USB soft-PHY CDR SerDes (IDES16/OSER16/IDES8) — the standalone gw_sh softphy fixtures
+    # (hdl/usb2-soft-console/{src/softphy_bel_top.v,build_softphy_bel.sh}) place these at a NEW
+    # tile-type family: the CDR serdes cluster is ttyp-227, rows {64, 82, 100}, cols 91-144
+    # (grid-verified; corrects an earlier "row 82, cols 89-140" comment -- that range actually
+    # straddles the 226/227 boundary at col 90/91, and (82,89) below was on the WRONG side:
+    # ttyp-226, not 227). ttyp-226 is a distinct, cols-37-90 tile family at the same 3 rows
+    # (same site count, 162) -- unrelated to the CDR cluster, not modelled here.
+    #
+    # HS/FS + op_mode axes (softphy fuzz run_v0..v4, xcvrselect/op_mode swept as UTMI constants):
+    #   v0: op_mode=0 xcvrselect=0 (HS baseline)   v4: op_mode=0 xcvrselect=1 (FS)
+    #   v1/v2/v3: op_mode=1/2/3, xcvrselect=0
+    # Measured .fs XOR diffs (diff_bits.py, 2026-07-10):
+    #   HS<->FS  (v0-v4): 27250 bits over 126 bit-rows, CONCENTRATED at rows 1173-1180 (~1000
+    #            bits/row) with a long fabric tail.  xcvrselect is a UTMI *runtime input pin*, not
+    #            a bel fuse: the soft-PHY re-synthesizes datapath logic for FS vs HS, so the diff is
+    #            mostly FABRIC, not a compact CDR-tile mode field.  Do NOT model it as an attr-fuse.
+    #   op_mode  (v0-v1): 172 bits, TIGHT (22 bit-rows, 1157-1167); (v0-v2)=224.  Also a UTMI input;
+    #            the small localized diff is the constant tie-off + normal/non-driving/loopback mux.
+    # => op_mode[1:0] / xcvrselect[1:0] are exposed as UTMI CONTROL INPUT PINS on the bel (driven
+    #    by the soft-PHY's UTMI FSM at runtime), NOT as chipdb param-fuse modes.  'utmi_pins' records
+    #    the control axis + the measured fuse-region locality for a future pin<->wire portmap trace.
+    #    The bel LOCATION (sites_ttyp 227) remains what nextpnr needs to place the CDR.
+    # io_tile re-anchored (82,89)->(82,91): (82,89) is ttyp-226 (wrong side of the boundary);
+    # (82,91) is the first real ttyp-227 tile on that row and is a member of sites_ttyp's own
+    # fold, so (per the Fix-3 phantom-bel guard) it registers as a normal in-set site, not a
+    # separate phantom bel.
+    'USB_CDR_SERDES': {'io_tile': (82, 91), 'cfg_tile': (82, 91),
+                       'sites_ttyp': 227,
+                       # UTMI control inputs (runtime pins, width in bits) + measured diff character.
+                       'utmi_pins': {
+                           'OP_MODE':    {'width': 2, 'diff_bits': 172, 'diff_rows': (1157, 1167),
+                                          'kind': 'local'},
+                           'XCVRSELECT': {'width': 2, 'diff_bits': 27250, 'diff_rows': (1173, 1180),
+                                          'kind': 'soft_fabric'},  # HS<->FS, fabric-dominated
+                       }},
+    # PLL trim — the fuzzed mid-array site @ tile (27,1).  ICP_SEL(6b)/LPF_RES(3b) are the
+    # LOCK-quality fuses (fixes the auto-calc-wrong lock failure).  1 of 12 PLL sites.
+    'PLL': {'io_tile': (27, 1), 'cfg_tile': (27, 1),
+            # The 12 PLL sites (datasheet-validated): 4 left + 4 right + 4 bottom.
+            'sites': [(27, 1), (45, 1), (63, 1), (81, 1),           # left edge (grid-verified heads)
+                      (27, 177), (45, 178), (63, 178), (81, 177),  # right edge (grid-verified heads)
+                      (108, 28), (108, 32), (108, 146), (108, 150)],# bottom BPLL
+            'attrs': {
+                'ICP_SEL': [(20, c, 7) for c in range(41, 47)],   # 6-bit charge-pump (LOCK trim)
+                'LPF_RES': [(20, c, 7) for c in range(61, 64)],   # 3-bit loop-filter R (LOCK trim)
+                # FRACTIONAL-PLL fuses (frac_pll5 uses these; integer trim alone is wrong):
+                'MDIV_FRAC_SEL':  [(20, 89, 7)],   # fractional multiplier (.XXX)
+                'ODIV0_FRAC_SEL': [(20, 99, 7)],   # fractional output divider
+                'SSC_EN':         [(20, 5, 7)],    # spread-spectrum enable
+            }},
+    # DHCE(CLKIN,CEN,CLKOUT) — dynamic HCLK-enable gate (yosys cells_xtra_gw5a.v:1196). NOT the
+    # same primitive as nextpnr's internal DHCEN mechanism: DHCEN there is an auto-synthesized
+    # global-clock-network gate (nextpnr pack.cc pack_dhcens()/globals.cc route_dhcen_net(), keyed
+    # off the fuzzed _dhcen_ce CE-wire->HCLK-mux table) that is NEVER created from a user RTL
+    # instance. DHCE is what LiteX's CRG instantiates directly (sipeed_tang_mega_138k_{l96,cfu,
+    # pro,pllcov}.py, gating cd_sys2x off cd_sys2x_i during DDR3 PHY calibration pause).
+    # SCOPE DECISION: the real dynamic-gating hardware (a CE wire routed into one of the per-side
+    # HCLK input muxes, chipdb.py:3007 fse_create_dhcen's method) needs an IDE routing trace this
+    # fix does NOT attempt — _dhcen_ce/_hclk_to_fclk have no GW5AST-138C entry and fabricating one
+    # would be a guessed fuse, which the audit explicitly forbids. Modelled instead as a location-
+    # only PASS-THROUGH bel (CLKIN wired through to CLKOUT in silicon terms; CEN accepted as a real
+    # cell/bel pin so Context::check and the packer are satisfied, but there is no fuse behind it —
+    # the gate is effectively always-enabled). This is SAFE for the two known consumers: both use
+    # DHCE only to blip cd_sys2x during init calibration pause (self.init.pause), not as a
+    # steady-state clock gate, so an always-enabled DHCE means the pause has no effect — a
+    # functional gap, not a routing hazard. Anchored at the same (108,165) control tile GSR uses
+    # (fse_create_gsr): unrelated function, but it is a real, always-present, non-IO-strobe tile
+    # good for a singleton control cell, so this is not a phantom site the way Fix 3 warns about.
+    # Only one DHCE bel is created (every known consumer instantiates exactly one).
+    'DHCE': {'io_tile': (108, 165), 'cfg_tile': (108, 165)},
+}
+# IODELAY C_STATIC_DLY (8 bits, LSB first) on left/right IO pads of GW5AST-138C, vendor-measured
+# (impl/fuzz/iodelay/iodelay_bits.json, one-hot values 1..128 per pad type, identical across rows).
+# The A pad's bits live in its own tile (ttyp 243 left / 245 right); the B pad's bits live in the
+# tile one row below (ttyp 244 left / 246 right).  Bottom pads are NOT covered here: the measured
+# bottom positions (row 21) disagree with the older 247-site table above, see the commit message.
+_GW5AST_LR_IODELAY_BITS = {
+    243: [(3, 6), (3, 3), (3, 1), (3, 10), (3, 12), (3, 13), (3, 14), (4, 14)],
+    244: [(11, 3), (11, 5), (10, 7), (10, 9), (10, 0), (9, 4), (9, 8), (9, 9)],
+    245: [(3, 129), (3, 132), (3, 134), (3, 125), (3, 123), (3, 122), (3, 121), (4, 121)],
+    246: [(11, 132), (11, 130), (10, 128), (10, 126), (10, 135), (9, 131), (9, 127), (9, 126)],
+}
+def fse_create_gw5ast_lr_iodelay(dev):
+    for r in range(dev.rows):
+        for c in range(dev.cols):
+            bits = _GW5AST_LR_IODELAY_BITS.get(dev.grid[r][c])
+            if bits:
+                fa = dev.extra_func.setdefault((r, c), {}).setdefault('fuzzed_attrs', {})
+                fa['IODELAY'] = {'C_STATIC_DLY': [list(b) for b in bits]}
+
+def fse_create_gw5ast_fuzzed_cells(dev, device):
+    if device != 'GW5AST-138C':
+        return
+    fse_create_gw5ast_lr_iodelay(dev)
+    for cell, info in _GW5AST_FUZZED_CELLS.items():
+        io_row, io_col = info['io_tile']
+        # For multi-site cells (sites_ttyp set), the io_tile anchor must itself be a member of
+        # that ttyp set, or this unconditional registration creates a PHANTOM bel at a site that
+        # doesn't exist there (e.g. OSER4_MEM/IDES4_MEM/OSER8_MEM/IDES8_MEM/USB_CDR_SERDES: their
+        # io_tile sits in a DIFFERENT tile type than the one sites_ttyp folds — see the Fix-3 audit).
+        # DQS/IODELAY/SDPB/DSP are clean (io_tile is inside their own site set) and unaffected.
+        # Assert loudly rather than silently skip: a wrong anchor here is a modelling bug, not a
+        # thing to paper over.
+        st = info.get('sites_ttyp')
+        if st is not None and dev.grid[io_row][io_col] != st:
+            print(f"WARNING: {cell} io_tile anchor ({io_row},{io_col}) is ttyp-{dev.grid[io_row][io_col]}, "
+                  f"not sites_ttyp-{st} -- skipping the io_tile registration (phantom-bel guard); "
+                  f"the cell is still placeable via its {st}-ttyp sites below.")
+        else:
+            # register the bel at its I/O-strobe anchor tile
+            extra = dev.extra_func.setdefault((io_row, io_col), {})
+            fz = extra.setdefault('fuzzed', {})
+            fz[cell] = {'io_tile': [io_row, io_col],
+                        'cfg_tile': list(info.get('cfg_tile', info['io_tile']))}
+        # register param-config fuses at the config tile, keyed by attr -> local bits
+        attrs = info.get('attrs', {})
+        if attrs:
+            cr, cc = info.get('cfg_tile', info['io_tile'])
+            cfg_extra = dev.extra_func.setdefault((cr, cc), {})
+            cfg = cfg_extra.setdefault('fuzzed_attrs', {})
+            cfg[cell] = {av: [list(b) for b in bits] for av, bits in attrs.items()}
+        # grid-derived sites: all tiles of a given ttyp (e.g. BSRAM heads = ttyp 40)
+        sites = list(info.get('sites', []))
+        st = info.get('sites_ttyp')
+        if st is not None:
+            sites += [(r, c) for r in range(dev.rows) for c in range(dev.cols)
+                      if dev.grid[r][c] == st]
+        # multi-site cells: register the bel + same tile-local attrs at every site
+        # (identical hard block; local fuse offsets are site-invariant).
+        for (sr, sc) in sites:
+            se = dev.extra_func.setdefault((sr, sc), {})
+            se.setdefault('fuzzed', {})[cell] = {'io_tile': [sr, sc], 'cfg_tile': [sr, sc]}
+            if attrs:
+                se.setdefault('fuzzed_attrs', {})[cell] = {
+                    av: [list(b) for b in bits] for av, bits in attrs.items()}
 
 def from_fse(device, fse, dat: Datfile):
     wnames.select_wires(device)
@@ -4677,6 +5913,9 @@ def from_fse(device, fse, dat: Datfile):
     fse_create_diff_types(dev, device)
     fse_create_hclk_nodes(dev, device, fse, dat)
     fse_create_slot_plls(dev, device, fse, dat)
+    fse_create_bottom_plls(dev, device, fse, dat)
+    fse_create_lr_plls(dev, device, fse, dat)
+    fse_create_gtr(dev, device, fse, dat)
     fse_create_adc(dev, device, fse, dat)
     fse_create_mipi(dev, device, dat)
     fse_create_i3c(dev, device, dat)
@@ -4691,6 +5930,7 @@ def from_fse(device, fse, dat: Datfile):
     fse_create_logic2clk(dev, device, dat)
     fse_create_dhcen(dev, device, fse, dat)
     fse_create_dlldly(dev, device)
+    fse_create_gw5ast_fuzzed_cells(dev, device)
     create_segments(dev, device)
     disable_plls(dev, device)
     sync_extra_func(dev)
@@ -5241,13 +6481,25 @@ def dat_portmap(dat, dev, device):
                         # very easy to determine whether we are dealing with
                         # the main IOLOGIC cell—if there are IOB bels, then it
                         # is the main one.
-                        if 'IOBB' in tile.bels:
-                            r_off, c_off = tile.bels['IOBB'].fuse_cell_offset
+                        #
+                        # GW5AST-138C io16 AUX tiles (ttyp-246, dat char '1' not 'I') have an
+                        # IOLOGICA bel (added for the OSER16/IDES16 AUX-cell fix) but NO IOBA/IOBB
+                        # -- 'IOBB' in tile.bels used to gate this WHOLE block, so buf=='A'
+                        # processing (which never touches r_off/c_off -- that's only used by the
+                        # buf=='B' cross-tile renaming below) was needlessly skipped too, leaving
+                        # PCLK/FCLK entirely absent from the portmap ("invalid sink port ...PCLK").
+                        # r_off/c_off are now looked up lazily, only where buf=='B' actually needs
+                        # them, so buf=='A' AUX tiles get their (offset-free) portmap regardless.
+                        has_iobb = 'IOBB' in tile.bels
+                        if has_iobb or buf == 'A':
+                            def _iobb_offset():
+                                return tile.bels['IOBB'].fuse_cell_offset
                             for idx, nam in _iologic_inputs:
                                 w_idx = dat.compat_dict[f'Iologic{buf}In'][idx]
                                 if w_idx >= 0:
                                     wire = wnames.wirenames[w_idx]
-                                    if buf == 'B':
+                                    if buf == 'B' and has_iobb:
+                                        r_off, c_off = _iobb_offset()
                                         node_wire = wire
                                         wire = f'IOLOGIC{wire}'
                                         node_name = f'X{row + r_off}Y{col + c_off}/{node_wire}'
@@ -5261,32 +6513,47 @@ def dat_portmap(dat, dev, device):
                                 w_idx = dat.compat_dict[f'Iologic{buf}Out'][idx]
                                 if w_idx >= 0:
                                     wire = wnames.wirenames[w_idx]
-                                    if buf == 'B':
+                                    if buf == 'B' and has_iobb:
+                                        r_off, c_off = _iobb_offset()
                                         node_wire = wire
                                         wire = f'IOLOGIC{wire}'
                                         node_name = f'X{row + r_off}Y{col + c_off}/{node_wire}'
                                         add_node(dev, node_name, "IO_I", row, col, wire)
                                         add_node(dev, node_name, "IO_I", row + r_off, col + c_off, node_wire)
                                     bel.portmap[nam] = wire
-                            # D8-D15 are placed in paired cell
-                            pair = {'A': 'B', 'B': 'A'}[buf]
-                            for idx, nam in _iologic_inputs:
-                                if nam not in {'D0', 'D1', 'D2', 'D3', 'D4', 'D5', 'D6', 'D7'}:
-                                    continue
-                                w_idx = dat.compat_dict[f'Iologic{pair}In'][idx]
-                                if w_idx >= 0:
-                                    wire = wnames.wirenames[w_idx]
-                                    if buf == 'A':
-                                        node_wire = wire
-                                        wire = f'IOLOGIC{wire}'
-                                        node_name = f'X{row + r_off}Y{col + c_off}/{node_wire}'
-                                        add_node(dev, node_name, "IO_I", row, col, wire)
-                                        add_node(dev, node_name, "IO_I", row + r_off, col + c_off, node_wire)
-                                    bel.portmap[f'D{int(nam[-1]) + 8}'] = wire
+                            # D8-D15 are placed in paired cell (needs the real cross-tile IOBB
+                            # offset -- AUX tiles with no IOBB skip this, same as before)
+                            if has_iobb:
+                                r_off, c_off = _iobb_offset()
+                                pair = {'A': 'B', 'B': 'A'}[buf]
+                                for idx, nam in _iologic_inputs:
+                                    if nam not in {'D0', 'D1', 'D2', 'D3', 'D4', 'D5', 'D6', 'D7'}:
+                                        continue
+                                    w_idx = dat.compat_dict[f'Iologic{pair}In'][idx]
+                                    if w_idx >= 0:
+                                        wire = wnames.wirenames[w_idx]
+                                        if buf == 'A':
+                                            node_wire = wire
+                                            wire = f'IOLOGIC{wire}'
+                                            node_name = f'X{row + r_off}Y{col + c_off}/{node_wire}'
+                                            add_node(dev, node_name, "IO_I", row, col, wire)
+                                            add_node(dev, node_name, "IO_I", row + r_off, col + c_off, node_wire)
+                                        bel.portmap[f'D{int(nam[-1]) + 8}'] = wire
 
                 elif name.startswith("OSER16"):
+                    # dat.portmap['IologicAIn'] (the non-family-specific table) is ENTIRELY -1 for
+                    # every OSER16/IDES16 input on GW5AST-138C -- not selectively missing a few
+                    # ports, the whole table is dead here. dat.compat_dict['IologicAIn'] is the
+                    # real, populated table for GW5 family devices (same one the general IOLOGICA/
+                    # IOLOGICB branch above already uses via is_GW5_family gating for its output
+                    # loop); OSER16/IDES16 are always the 'A' slot (no IOLOGICB-associated variant
+                    # exists), so index directly rather than trust a possibly-stale `buf` from a
+                    # sibling loop iteration. FCLK (idx 20) is genuinely -1 even in compat_dict (same
+                    # as the general IOLOGIC branch's own FCLK special-case) -- keep the dummy pip
+                    # fallback for that one only.
+                    in_table = dat.portmap['IologicAIn'] if not is_GW5_family(device) else dat.compat_dict['IologicAIn']
                     for idx, nam in _oser16_inputs:
-                        w_idx = dat.portmap[f'IologicAIn'][idx]
+                        w_idx = in_table[idx]
                         if w_idx >= 0:
                             bel.portmap[nam] = wnames.wirenames[w_idx]
                         elif nam == 'FCLK':
@@ -5298,8 +6565,10 @@ def dat_portmap(dat, dev, device):
                             bel.portmap[nam] = wnames.wirenames[w_idx]
                     bel.portmap.update(_oser16_fixed_inputs)
                 elif name.startswith("IDES16"):
+                    # see OSER16's identical in_table fix above for why.
+                    in_table = dat.portmap['IologicAIn'] if not is_GW5_family(device) else dat.compat_dict['IologicAIn']
                     for idx, nam in _ides16_inputs:
-                        w_idx = dat.portmap[f'IologicAIn'][idx]
+                        w_idx = in_table[idx]
                         if w_idx >= 0:
                             bel.portmap[nam] = wnames.wirenames[w_idx]
                         elif nam == 'FCLK':
@@ -6698,6 +7967,13 @@ def fse_wire_delays(db, dev):
             db.wire_delay[wnames.clknames[i]] = "CENT_SPINE_PCLK"
             db.wire_delay[mk_clock_wname(dev, wnames.clknames[i], 0)] = "CENT_SPINE_PCLK"
             db.wire_delay[mk_clock_wname(dev, wnames.clknames[i], 1)] = "CENT_SPINE_PCLK"
+        for i in _gw5ast_hclk_bridge_srcids: # clock inputs (HCLK->bridge)
+            db.wire_delay[wnames.clknames[i]] = "CENT_SPINE_PCLK"
+            db.wire_delay[mk_clock_wname(dev, wnames.clknames[i], 0)] = "CENT_SPINE_PCLK"
+            db.wire_delay[mk_clock_wname(dev, wnames.clknames[i], 1)] = "CENT_SPINE_PCLK"
+        for hclk_idx in range(6):
+            for i in range(4):
+                db.wire_delay[f'CLKDIV_O{hclk_idx}{i}'] = 'X0'
     for i in range(1000, 1002): # HCLK bridge muxes
         db.wire_delay[wnames.clknames[i]] = "HclkHbrgMux"
     for i in range(1002, 1010): # HCLK
@@ -6813,4 +8089,31 @@ def pll_pads(dev, device, pad_locs):
         return
     for loc, pll_data in _pll_pads[device].items():
         dev.pad_pll[loc] = pll_data
+
+def fill_bottom_pll_pads(dev, device):
+    """Map the GW5AST-138C dedicated BPLL clock pins to the BPLL bel.
+
+    Runs after dat_fill_io_cfgs (io_cfg is populated by then). The BPLL bel was
+    created by fse_create_bottom_plls at head tile R108C146.
+    """
+    if device not in {'GW5AST-138C'}:
+        return
+    if (108, 146) not in dev.extra_func or 'bpll' not in dev.extra_func[108, 146]:
+        return
+    # alt-pin-function -> BPLL pin type. The bottom edge shares each clock pin
+    # between BPLL0 and BPLL1 (e.g. IOB60A = BPLL0_T_IN0/BPLL1_T_IN0); we model a
+    # single BPLL bel at head tile (108,146), so map any BPLLn_*_IN/FB pin onto it.
+    import re as _re
+    def _bpll_pin_type(cfg):
+        m = _re.match(r'BPLL\d*_([TC])_(IN|FB)\d?$', cfg)
+        if not m:
+            return None
+        tc, kind = m.groups()
+        return {('T', 'IN'): 'CLKIN_T', ('C', 'IN'): 'CLKIN_C',
+                ('T', 'FB'): 'FB_T', ('C', 'FB'): 'FB_C'}[(tc, kind)]
+    for ioloc, cfgs in dev.io_cfg.items():
+        for cfg in cfgs:
+            pt = _bpll_pin_type(cfg)
+            if pt is not None and ioloc not in dev.pad_pll:
+                dev.pad_pll[ioloc] = (108, 146, pt, 'PLL')
 
