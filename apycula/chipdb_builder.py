@@ -450,6 +450,8 @@ def main():
 
     chipdb.dat_portmap(dat, db, device)
     chipdb.add_hclk_bels(dat, db, device)
+    chipdb.fse_wire_delays(db, params['device'])
+    chipdb.sync_extra_func(db)
 
 
     # XXX GW1NR-9 has interesting IOBA pins on the bottom side

@@ -528,7 +528,8 @@ class ChipDB:
 
     def get_iob_fuse_cell_offset(self, x: int, y: int, idx_str: str) -> Coord:
         """ Return IOB fuse cell """
-        return self.get_tiledata(x, y).bels[f'IOB{idx_str}'].fuse_cell_offset
+        bel = self.get_tiledata(x, y).bels.get(f'IOB{idx_str}')
+        return bel.fuse_cell_offset if bel else None
 
     def get_alu_modes(self, x: int, y: int, idx: int) -> dict[int, set[Coord]]:
         return self.get_tiledata(x, y).bels[f'ALU{idx}'].modes
@@ -822,7 +823,7 @@ class BankDesc:
                 'SSTL33_I': '3.3', 'SSTL33_II': '3.3', 'SSTL15D': '1.5', 'SSTL18D_I': '1.8', 'SSTL18D_II': '1.8',
                 'SSTL25D_I': '2.5', 'SSTL25D_II': '2.5', 'SSTL33D_I': '3.3', 'SSTL33D_II': '3.3', 'MIPI': '2.5',
                 'SSTL': '1.5', 'SSTL_D': '1.5', 'HSTL': '1.5', 'HSTL_D': '1.5',
-                'SSTL15_5A': '1.5', 'SSTL15D_5A': '1.5'}
+                'SSTL15_5A': '1.5', 'SSTL15D_5A': '1.5', 'LVPECL33E': '3.3', 'LVPECL33': '3.3', 'LVPECL_E': '3.3'}
 
     def __init__(self, x: int, y: int):
         self.x, self.y = x, y
@@ -906,7 +907,10 @@ class BankDesc:
         """ Add IO to the bank """
         self.bels.append(bel)
         self.check_or_set_attr(bel, 'PULL_STRENGTH')
-        if not bel.is_diff_io():
+        # Differential IO_TYPE standards set on an IOB cell (e.g. LVDS25 sense input or LVPECL33E on USB pads)
+        # do not constrain single-ended bank IO_TYPE, only BANK_VCCIO when driven as output.
+        diff_io_types = {'LVDS25', 'LVDS25E', 'BLVDS_E', 'MLVDS_E', 'RSDS25', 'RSDS_E', 'LVPECL_E', 'LVPECL33E', 'LVPECL33', 'LVCMOS_D'}
+        if not bel.is_diff_io() and bel.cell.attrs.get('IO_TYPE') not in diff_io_types:
             self.check_or_set_attr(bel, 'IO_TYPE')
             if 'IS_OUTPUT' in bel.flags:
                 self.check_or_set_attr(bel, 'BANK_VCCIO')
@@ -1839,8 +1843,11 @@ class Device:
     def process_IBUF(self, bank_desc: BankDesc, bel: IoBelDesc) -> list[CellFuseBits]:
         av = self.set_io_attrvals(bel, self.default_ibuf_attrs)
         fuses = []
-        if not bank_desc.has_outputs:
-            io_type = bel.cell.attrs.get('IO_TYPE', self.get_default_io_type())
+        cell_io_type = bel.cell.attrs.get('IO_TYPE')
+        if cell_io_type:
+            self.chipdb.get_iob_attr_val(AttrVal("IO_TYPE", cell_io_type), av)
+        elif not bank_desc.has_outputs:
+            io_type = self.get_default_io_type()
             self.chipdb.get_iob_attr_val(AttrVal("IO_TYPE", io_type), av)
         else:
             self.chipdb.get_iob_attr_val(AttrVal("IO_TYPE", bank_desc.io_type), av)
@@ -1851,7 +1858,7 @@ class Device:
     def process_TBUF(self, bank_desc: BankDesc, bel: IoBelDesc) -> list[CellFuseBits]:
         av = self.set_io_attrvals(bel, self.default_tbuf_attrs)
         fuses = []
-        self.chipdb.get_iob_attr_val(AttrVal("IO_TYPE", bank_desc.io_type), av)
+        self.chipdb.get_iob_attr_val(AttrVal("IO_TYPE", bel.cell.attrs.get('IO_TYPE') or bank_desc.io_type), av)
         self.chipdb.get_iob_attr_val(AttrVal("BANK_VCCIO", bank_desc.bank_vccio), av)
         fuses += self.get_iob_fuses(bel.x, bel.y, bel.idx_str, av)
         return fuses
@@ -1859,7 +1866,7 @@ class Device:
     def process_IOBUF(self, bank_desc: BankDesc, bel: IoBelDesc) -> list[CellFuseBits]:
         if bel.is_i3c_io():
             av = self.set_io_attrvals(bel, self.default_i3c_iobuf_attrs, defaults_only = True)
-            self.chipdb.get_iob_attr_val(AttrVal("IO_TYPE", bank_desc.io_type), av)
+            self.chipdb.get_iob_attr_val(AttrVal("IO_TYPE", bel.cell.attrs.get('IO_TYPE') or bank_desc.io_type), av)
         elif bel.is_mipi_in():
             if bel.idx_str == 'A':
                 av = self.set_io_attrvals(bel, self.default_mipi_iobuf_attrs, defaults_only = True)
@@ -1868,7 +1875,7 @@ class Device:
                 av = self.set_io_attrvals(bel, self.default_mipi_iobuf_attrs, defaults_only = True)
         else:
             av = self.set_io_attrvals(bel, self.default_iobuf_attrs)
-            self.chipdb.get_iob_attr_val(AttrVal("IO_TYPE", bank_desc.io_type), av)
+            self.chipdb.get_iob_attr_val(AttrVal("IO_TYPE", bel.cell.attrs.get('IO_TYPE') or bank_desc.io_type), av)
         fuses = []
         self.chipdb.get_iob_attr_val(AttrVal("BANK_VCCIO", bank_desc.bank_vccio), av)
         self.set_iobuf_attrs(bel, av)
@@ -7373,6 +7380,8 @@ class GW5AST_138C(GW5A):
         # SSTL15D -> 165. The generic 'SSTL'/'SSTL_D' codes have no logicinfo entry on the 138C.
         self.io_type_alias = {frozenset({'SSTL15'}): 'SSTL15_5A',
                               frozenset({'SSTL15D'}): 'SSTL15D_5A',
+                              frozenset({'LVPECL33E'}): 'LVPECL_E',
+                              frozenset({'LVPECL33'}): 'LVPECL_E',
                               **self.io_type_alias}
         # find the clock bridge tiles
         self.clock_bridge_ttypes = range(80, 86)
@@ -7394,7 +7403,7 @@ class GW5AST_138C(GW5A):
         return self.chipdb.get_spine_enable_fuses(x, y, spine_enable_table)
 
     def is_clock_pip(self, tiledata: Tile, src: str, dest: str) -> bool:
-        if src[8:].startswith('_BOT') or src[8:].startswith('_TOP'):
+        if src[8:].startswith('_BOT') or src[8:].startswith('_TOP') or src.endswith(('_BOT', '_TOP')):
             return True
         if src not in wnames.clknumbers:
             return False
@@ -7603,6 +7612,27 @@ class GW5AST_138C(GW5A):
 
     def get_IOLOGICO_EMPTY_fuses(self, bel: BelDesc) -> list[CellFuseBits]:
         return super().get_IOLOGICO_EMPTY_fuses(bel) + self.get_merged_iodelay_fuses(self.make_IologicBelDesc(bel))
+
+    def get_IOLOGIC_DUMMY_fuses(self, bel: BelDesc) -> list[CellFuseBits]:
+        """ When OSER16 and IDES16 share a bidirectional pad, iologic_partner_cell sets both
+        main_cell_outmode and main_cell_inmode on each IOLOGIC_DUMMY; dispatch on the cell's own parms. """
+        iol_bel = self.make_IologicBelDesc(bel)
+        iol_bel = self.set_iologic_bel_fclk(iol_bel)
+        attr_vals = self.common_iologic_handler(iol_bel)
+        if 'OUTMODE' in iol_bel.cell.parms:
+            attr_vals += self.get_out_iologic_attrs(iol_bel)
+        else:
+            attr_vals += self.get_in_iologic_attrs(iol_bel)
+        av = self.set_iologic_attrvals(iol_bel, attr_vals)
+        return self.get_iologic_cell_fuses(iol_bel.x, iol_bel.y, iol_bel.idx_str, av)
+
+    def get_IOLOGIC_fuses(self, bel: BelDesc) -> list[CellFuseBits]:
+        """ OSER16/IDES16 """
+        mod_bel = self.make_IologicBelDesc(bel)
+        if 'OUTMODE' in bel.cell.parms:
+            return self.common_out_iologic_handler(mod_bel)
+        else:
+            return self.common_in_iologic_handler(mod_bel)
 
     def common_in_iologic_handler(self, bel: IologicBelDesc) -> list[CellFuseBits]:
         return super().common_in_iologic_handler(bel) + self.get_merged_iodelay_fuses(self.make_IologicBelDesc(bel))

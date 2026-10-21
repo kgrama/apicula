@@ -61,6 +61,52 @@ dominated, so it must NOT be modeled as an attr-fuse mode.  op_mode's small loca
 constant tie-off + normal/loopback mux.  Recorded in chipdb.py USB_CDR_SERDES['utmi_pins'] as the
 control axis + measured locality; the pin<->wire portmap trace is the remaining refinement.
 
+## DDRDLL LOCK / DQS exit (2026-10-21)
+- `cells/ddrdll_lock_ff.v` (DDRDLL LOCK into DFF): **680 set bits**. Source: `/tmp/gw5ast_fuzz/ddrdll_lock_ff/bits.json`.
+- `cells/dqs_exit_ff.v` (DQS RVALID, RBURST, RFLAG, WFLAG into DFFs): **1915 set bits**. Source: `/tmp/gw5ast_fuzz/dqs_exit_ff/bits.json`.
+- Both counts are whole-fixture totals. Coordinates per exit wire (RVALID, RBURST, RFLAG, WFLAG, LOCK) are not yet split out.
+- Before this section, this file had no LOCK or RBURST/RVALID/RFLAG/WFLAG entries.
+
+## GTR12_QUAD (top-row SerDes)
+- `cells/gtr_fabric_ff.v` and `cells/gtr_upar_ff.v` fail in the vendor synth/PnR step with `ERROR (CM2031) : csr file should be specified.` Logs: `/tmp/gw5ast_fuzz/run_gtr_fabric_ff_1501907/gwsh.log:844` and `/tmp/gw5ast_fuzz/run_gtr_upar_ff_1501959/gwsh.log:848`.
+- `oracle.sh` accepts only a `.cst` extra argument, with no CSR option. No `.fs` was produced, so there are no bit counts.
+- Status: blocked on the gw_sh option name for the CSR file. A search for "SerDesCSR" found only Python SDK module names (gw5at_sdk), not a gw_sh option.
+
+## USB pins (pico_usb)
+Per-pin harness: `usb_pins/` holds `usb_base.v`/`.cst` (baseline) and one `.v`/`.cst` per pin for usb_rxdp_i, usb_rxdn_i, usb_pullup_en_o, usb_dxp_io, usb_dxn_io, usb_term_dp_io, usb_term_dn_io.
+
+| Port | Pad | Site | IO type | Dir |
+|---|---|---|---|---|
+| usb_rxdp_i | H17 | IOR96[A] | LVDS25 | in |
+| usb_rxdn_i | H20 | IOR69[A] | LVDS25 | in |
+| usb_pullup_en_o | M17 | IOR73[A] | LVCMOS33 | out |
+| usb_dxp_io | J19 | IOR80[A] | LVPECL33E | io |
+| usb_dxn_io | H19 | IOR80[B] | LVPECL33E | io |
+| usb_term_dp_io | J16 | IOR109[A] | LVCMOS33 | io |
+| usb_term_dn_io | AB16 | IOB80[A] (bank 5) | LVCMOS33 | io |
+
+Source: pico_usb pin report `impl/pnr/pico_usb.pin.html` (identical rows in `pico_usb_axi_system.pin.html`), under `io_base/sbp-computational`. The report comes from an earlier pnr run.
+
+Caveats (from `pico_usb.cst`):
+- usb_dxn_io has no separate IO_LOC. Only the usb_dxp_io line lists J19,H19.
+- The rxdp/rxdn LVDS pairs list a second pad in the cst (H18, G20) that the pin reports do not show.
+
+Per-pin set-bit counts (XOR vs `usb_base`, Gowin oracle GW5AST-138C, one run each, 2026-10-21; `/tmp/usb_pins/summary.txt` ends with DONE):
+
+| Pin | Set bits |
+|---|---|
+| usb_rxdp_i | 6 |
+| usb_rxdn_i | 6 |
+| usb_pullup_en_o | 71 |
+| usb_dxp_io | 75 |
+| usb_dxn_io | 75 |
+| usb_term_dp_io | 55 |
+| usb_term_dn_io | 29 |
+
+Caveat: each count includes pad IO config and any routing the pin adds; no per-bit split yet. The oracle runs printed `RuntimeWarning: Unexpected value in sys.prefix` (venv path resolved via `fuzz/gw5ast/../..`).
+
+Chirp (`/home/evd/workspace/sbp-computational/docs/PICO_USB_UTMI_OBSERVABILITY_2026-10-15.md`; not a source of fuse data): device chirp K 72001 cycles = 1200.016 us; chirp K end to highspeed 15517 cycles = 258.617 us. These are UTMI-level records, not pad measurements of usb_dxp_io/usb_dxn_io.
+
 ## TODO next
 - OSER10, ELVDS_OBUF (HDMI), DCS, DHCEN, SDPB.
 - Fold (attr -> {bits}) into apycula chipdb fuse tables for these cells, keyed by tile.

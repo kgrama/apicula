@@ -888,7 +888,11 @@ clknames_5ast138c.update({
     101: 'BRPLL0CLK0', 102: 'BRPLL0CLK1', 103: 'BRPLL0CLK2', 104: 'BRPLL0CLK3',
 })
 
-clknames_5ast138c.update({n: f"UNK{n}" for n in range(105, 131)})
+clknames_5ast138c.update({
+    105: 'HCLKBRG0', 106: 'HCLKBRG1', 107: 'HCLKBRG2', 108: 'HCLKBRG3',
+    109: 'HCLKBRG4', 110: 'HCLKBRG5', 111: 'HCLKBRG6', 112: 'HCLKBRG7',
+})
+clknames_5ast138c.update({n: f"UNK{n}" for n in range(113, 131)})
 
 # These are the external clock pins, two on each side
 clknames_5ast138c.update({
@@ -907,7 +911,12 @@ clknames_5ast138c.update({
 
 #clknames_5ast138c[153] = 'VCC'
 
-clknames_5ast138c.update({n: f"UNK{n}" for n in range(163, 237)})
+clknames_5ast138c.update({n: f"UNK{n}" for n in range(163, 220)})
+clknames_5ast138c.update({
+    220: 'HCLKBRG8', 221: 'HCLKBRG9', 222: 'HCLKBRGA', 223: 'HCLKBRGB',
+    224: 'HCLKBRGC', 225: 'HCLKBRGD', 226: 'HCLKBRGE', 227: 'HCLKBRGF',
+})
+clknames_5ast138c.update({n: f"UNK{n}" for n in range(228, 237)})
 
 clknames_5ast138c.update({
     237: 'CBRIDGEOUT_TOP0', 238: 'CBRIDGEOUT_TOP1', 239: 'CBRIDGEOUT_TOP2', 240: 'CBRIDGEOUT_TOP3',

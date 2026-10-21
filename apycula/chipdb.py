@@ -1615,18 +1615,17 @@ def gw5_add_hclk_bels(dat, dev, device):
                     f'HCLK_BUF_BO{hclk_idx}{i}', {}).update({portmap['CLKOUT']: set()})
                 add_node(dev, f'HCLK{hclk_idx}_HCLK_BUF_BO{hclk_idx}{i}',
                          "GLOBAL_CLK", row, col, f'HCLK_BUF_BO{hclk_idx}{i}')
-                # Connect HCLK_MUX_ALPHA{hclk_idx}{i} into the Center Clock Bridge
-                # global clock input wires (TOP and BOT halves) so CLKDIV outputs
-                # reach the global clock spine network.
-                alpha_wire = f'HCLK_MUX_ALPHA{hclk_idx}{i}'
-                add_node(dev, f'HCLK{hclk_idx}_{alpha_wire}',
-                         "GLOBAL_CLK", row, col, alpha_wire)
+                # Connect CLKDIV_O{hclk_idx}{i} and HCLK_BUF_BO{hclk_idx}{i} directly
+                # into the Center Clock Bridge global clock input wires (TOP and BOT halves)
+                # so CLKDIV outputs reach the global clock spine network without colliding
+                # with undivided FCLK paths that share HCLK_BUF_BI/BO.
+                bo_wire = f'HCLK_BUF_BO{hclk_idx}{i}'
                 brg_srcid = _gw5ast_hclk_bridge_wires[hclk_idx][i]
                 brg_base = wnames.clknames[brg_srcid]
                 for half in range(2):
                     brg_wname = mk_clock_wname(device, brg_base, half)
                     dev.hclk_pips.setdefault((row, col), {}).setdefault(
-                        brg_wname, {}).update({alpha_wire: set()})
+                        brg_wname, {}).update({portmap['CLKOUT']: set(), bo_wire: set()})
                     add_node(dev, brg_wname, "GLOBAL_CLK", row, col, brg_wname)
             else:
                 portmap['HCLKIN'] = f'CLKDIV_I{hclk_idx}{i}'
@@ -5525,6 +5524,7 @@ _GW5AST_FUZZED_CELLS = {
     'DSP': {'io_tile': (18, 1), 'sites_ttyp': 20},   # io_tile is a real ttyp-20 head (no +1)
     # bel at (108,0) = the only ttyp-48 tile (carries the vendor DLL0 shortval, decoded from
     # dqs00.fs IOL109 record); DIV_SEL/SCAL_EN/DLL_FORCE bit coords lie inside tile (0,0).
+    # DDRDLL LOCK fabric exit -> Q0 @ (108,0); STEP[0..7] -> Q0..Q7 @ (108,1)
     'DDRDLL': {'io_tile': (108, 0), 'cfg_tile': (0, 0),
                'attrs': {
                    'DIV_SEL=1':    [(18, 59, 7)],
