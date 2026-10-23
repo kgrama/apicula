@@ -576,6 +576,10 @@ class ChipDB:
         _, wire, _, side = self.db.extra_func[y, x]['dhcen'][idx_int]['pip']
         return (wire, side)
 
+    def get_dhcen_direct_fuses(self, x: int, y: int, idx_int) -> set[Coord]:
+        raw = self.db.extra_func.get((y, x), {}).get('dhcen', [])[idx_int].get('fuses', set())
+        return {tuple(f) for f in raw}
+
     def get_dcs_spine(self, x: int, y: int, idx_int) -> str:
         return self.db.extra_func[y, x]['dcs'][idx_int]['clkout']
 
@@ -853,6 +857,7 @@ class BankDesc:
         self.has_true_lvds_outputs = False
         # if have LVDS outputs when BANK_VCCIO must be >= this
         self.lvds_BANK_VCCIO = None
+        self.diff_io_types = set()
         self.attrs = {}
         self.bels = []
         # For diagnostic messages, we record the I/O pin that caused a voltage to be applied to the bank.
@@ -907,6 +912,8 @@ class BankDesc:
                 cur_val = self.attrs.get(attr)
                 if new_val and new_val != cur_val:
                     set_bel = self.set_attr_bels[attr]
+                    if attr == 'IO_TYPE' and self.get_io_type_vccio(new_val, bel) == self.get_io_type_vccio(cur_val, set_bel):
+                        return
                     raise Exception(f"{attr} conflict: X{bel.x}Y{bel.y}/IOB{bel.idx_str} ({bel.cell.name}) is trying to set {new_val} but X{set_bel.x}Y{set_bel.y}/IOB{set_bel.idx_str} ({set_bel.cell.name}) already set {cur_val}")
 
     def check_for_vccio_conflict(self, default_io_type: str):
@@ -943,10 +950,18 @@ class BankDesc:
                 self.check_or_set_attr(bel, 'BANK_VCCIO')
                 self.has_outputs = True
         else: # LVDS
+            if bel.cell.attrs.get('IO_TYPE'):
+                self.diff_io_types.add(bel.cell.attrs['IO_TYPE'])
             if 'IS_OUTPUT' in bel.flags:
                 if 'IO_TYPE' not in bel.cell.attrs:
                     if bel.is_mipi:
                         io_type = device.get_mipi_io_type()
+                    elif bel.idx_str == 'B':
+                        a_bel = self.get_bel_by_xy(bel.x, bel.y, 'A')
+                        if a_bel and 'IO_TYPE' in a_bel.cell.attrs:
+                            io_type = a_bel.cell.attrs['IO_TYPE']
+                        else:
+                            raise Exception(f"LVDS bel X{bel.x}Y{bel.y}/IOB{bel.idx_str} must have IO_TYPE.")
                     else:
                         raise Exception(f"LVDS bel X{bel.x}Y{bel.y}/IOB{bel.idx_str} must have IO_TYPE.")
                 else:
@@ -959,6 +974,8 @@ class BankDesc:
     def get_attrs(self) -> Iterator[AttrVal]:
         for attr, val in self.attrs.items():
             yield AttrVal(attr, val)
+        for diff_io_type in sorted(self.diff_io_types):
+            yield AttrVal('IO_TYPE', diff_io_type)
 
     def get_bel_by_xy(self, x: int, y: int, idx_str: str) -> IoBelDesc:
         ret_bel = None
@@ -1044,7 +1061,7 @@ class Device:
                  ('SINGLERESISTOR', 'OFF'), ('LVDS_OUT', 'OFF'), ('DDR_DYNTERM', 'NA'),
                  ('TO', 'INV'), ('PERSISTENT', 'OFF'), ('ODMUX', 'TRIMUX'),
                  ('OPENDRAIN', 'OFF')]
-        self.default_elvds_iobuf_attrs = [('SLEWRATE', 'FAST'),
+        self.default_elvds_iobuf_attrs = [('SLEWRATE', 'FAST'), ('PULLMODE', 'NONE'),
                  ('DRIVE', 'UNKNOWN'), ('HYSTERESIS', 'NA'), ('CLAMP', 'OFF'), ('DIFFRESISTOR', 'OFF'),
                  ('SINGLERESISTOR', 'OFF'), ('LVDS_OUT', 'OFF'), ('DDR_DYNTERM', 'NA'),
                  ('PERSISTENT', 'OFF'), ('ODMUX', 'TRIMUX'), ('PADDI', 'PADDI'),
@@ -1808,8 +1825,8 @@ class Device:
                     bank_desc.set_attr("LVDS_OUT", "ON")
                     default_io_type = self.get_default_tlvds_io_type()
                     bank_desc.set_attr("IO_TYPE", default_io_type)
-                if bank_desc.has_lvds_outputs:
-                    bank_desc.force_bank_vccio(self.get_lvds_bank_vccio())
+                if bank_desc.has_lvds_outputs and not bank_desc.bank_vccio:
+                    bank_desc.force_bank_vccio(bank_desc.lvds_BANK_VCCIO or self.get_lvds_bank_vccio())
                 if not bank_desc.bank_pull_strength:
                     default_pull_strength = self.get_default_pull_strength()
                     bank_desc.set_attr("PULL_STRENGTH", default_pull_strength)
@@ -1852,6 +1869,10 @@ class Device:
 
         for attr, val in force_attrs.items():
             self.chipdb.get_iob_attr_val(AttrVal(attr, val), av)
+        if not defaults_only:
+            ctle_val = bel.cell.attrs.get('CTLE')
+            if ctle_val and ctle_val != 'OFF':
+                self.chipdb.get_iob_attr_val(AttrVal('IOB_UNKNOWN71', ctle_val), av)
         return av
 
     def set_iobuf_attrs(self, bel: IoBelDesc, av: set[int]):
@@ -1874,7 +1895,7 @@ class Device:
     def process_OBUF(self, bank_desc: BankDesc, bel: IoBelDesc) -> list[CellFuseBits]:
         av = self.set_io_attrvals(bel, self.default_obuf_attrs)
         fuses = []
-        self.chipdb.get_iob_attr_val(AttrVal("IO_TYPE", bank_desc.io_type), av)
+        self.chipdb.get_iob_attr_val(AttrVal("IO_TYPE", bel.cell.attrs.get('IO_TYPE') or bank_desc.io_type), av)
         self.chipdb.get_iob_attr_val(AttrVal("BANK_VCCIO", bank_desc.bank_vccio), av)
         fuses += self.get_iob_fuses(bel.x, bel.y, bel.idx_str, av)
         return fuses
@@ -2055,8 +2076,15 @@ class Device:
 
     def process_ELVDS_IOBUF(self, bank_desc: BankDesc, bel: IoBelDesc) -> list[CellFuseBits]:
         self.check_elvds_placement(bel)
+        if bel.idx_str == 'B':
+            a_bel = bank_desc.get_bel_by_xy(bel.x, bel.y, 'A')
+            if a_bel:
+                for k in ('IO_TYPE', 'DRIVE', 'PULLMODE', 'CTLE', 'SLEWRATE'):
+                    if k not in bel.cell.attrs and k in a_bel.cell.attrs:
+                        bel.cell.attrs[k] = a_bel.cell.attrs[k]
 
         av = self.set_io_attrvals(bel, self.default_elvds_iobuf_attrs)
+        self.chipdb.get_iob_attr_val(AttrVal("IOB_UNKNOWN51", "TRIMUX"), av)
         fuses = []
         io_type = bel.cell.attrs.get('IO_TYPE')
         if io_type:
@@ -2102,7 +2130,16 @@ class Device:
         return []
 
     def get_IBUF_fuses(self, bel: BelDesc) -> list[CellFuseBits]:
-        self.common_io_handler(self.make_IoBelDesc(bel))
+        io_bel = self.make_IoBelDesc(bel)
+        self.common_io_handler(io_bel)
+        if bel.idx_str == 'A':
+            diff_io_types = {'LVDS25', 'LVDS25E', 'BLVDS_E', 'MLVDS_E', 'RSDS25', 'RSDS_E', 'LVPECL_E', 'LVPECL33E', 'LVPECL33', 'LVCMOS_D'}
+            norm_bel = self.normalize_io_bel_attr(io_bel)
+            if norm_bel.cell.attrs.get('IO_TYPE') in diff_io_types:
+                bank_idx = self.get_bel_bank(bel)
+                if not self.io_banks[bank_idx].get_bel_by_xy(bel.x, bel.y, 'B'):
+                    aux_bel = BelDesc(bel.x, bel.y, 'B', bel.cell)
+                    self.common_io_handler(self.make_IoBelDesc(aux_bel))
         return []
 
     def get_TBUF_fuses(self, bel: BelDesc) -> list[CellFuseBits]:
@@ -2649,6 +2686,10 @@ class Device:
         # for the corresponding HCLK and set its fuses.
         fuses = []
         if 'DHCEN_USED' in bel.cell.attrs:
+            direct_bits = self.chipdb.get_dhcen_direct_fuses(bel.x, bel.y, bel.idx_int)
+            if direct_bits:
+                fuses.append(CellFuseBits(bel.x, bel.y, set(direct_bits)))
+                return fuses
             wire, side = self.chipdb.get_dhcen_wire_side(bel.x, bel.y, bel.idx_int)
 
             attrval = {
@@ -7443,9 +7484,14 @@ class GW5AST_138C(GW5A):
         # SSTL15D -> 165. The generic 'SSTL'/'SSTL_D' codes have no logicinfo entry on the 138C.
         self.io_type_alias = {frozenset({'SSTL15'}): 'SSTL15_5A',
                               frozenset({'SSTL15D'}): 'SSTL15D_5A',
-                              frozenset({'LVPECL33E'}): 'LVPECL_E',
-                              frozenset({'LVPECL33'}): 'LVPECL_E',
+                              frozenset({'LVPECL33'}): 'LVPECL33E',
                               **self.io_type_alias}
+        self.default_obuf_attrs = [('SLEWRATE', 'MEDIUM') if a == 'SLEWRATE' else (a, v)
+                                   for a, v in self.default_obuf_attrs]
+        self.default_tbuf_attrs = [('SLEWRATE', 'MEDIUM') if a == 'SLEWRATE' else (a, v)
+                                   for a, v in self.default_tbuf_attrs]
+        self.default_iobuf_attrs = [('SLEWRATE', 'MEDIUM') if a == 'SLEWRATE' else (a, v)
+                                    for a, v in self.default_iobuf_attrs]
         # find the clock bridge tiles
         self.clock_bridge_ttypes = range(80, 86)
         self.clock_bridge_xy = set()
@@ -7605,7 +7651,7 @@ class GW5AST_138C(GW5A):
             if bel.main_cell_inmode == 'IDDRX8':                   # paired with IDES16
                 av += [AttrVal('INMODE', 'UNK105'), AttrVal('CLKIMUX', 'ENABLE')] + self.iologic_paired_in_fclksel(bel)
         elif outmode == 'DDRENABLE16':                             # OSER16 aux cell
-            av += [AttrVal('OUTMODE', 'LVDSOUT'), AttrVal('ISI', 'ENABLE'), AttrVal('OCLKCE', 'CE'),
+            av += [AttrVal('OUTMODE', 'DDRENABLE'), AttrVal('ISI', 'ENABLE'), AttrVal('OCLKCE', 'CE'),
                    AttrVal('LSRIMUX_0', '0'), AttrVal('WRFCLKSEL', 'UNK102')]
         else:
             return super().get_out_iologic_attrs(bel)
@@ -7685,6 +7731,8 @@ class GW5AST_138C(GW5A):
         if 'OUTMODE' in iol_bel.cell.parms:
             attr_vals += self.get_out_iologic_attrs(iol_bel)
         else:
+            if iol_bel.cell.parms.get('INMODE') == 'DDRENABLE16':
+                return []
             attr_vals += self.get_in_iologic_attrs(iol_bel)
         av = self.set_iologic_attrvals(iol_bel, attr_vals)
         return self.get_iologic_cell_fuses(iol_bel.x, iol_bel.y, iol_bel.idx_str, av)
@@ -7728,8 +7776,8 @@ class GW5AST_138C(GW5A):
             print(f'transplant: {len(tiles)} tiles from {path}')
         return fuses
 
-    def get_work_in_progress_fuses(self) -> list[CellFuseBits]:
-        return super().get_work_in_progress_fuses() + self.get_transplant_fuses()
+    def get_work_in_progress_fuses(self, used_wires: UsedWires) -> list[CellFuseBits]:
+        return super().get_work_in_progress_fuses(used_wires) + self.get_transplant_fuses()
 
     #==============================
     #========== Fuzzed hard cells (DQS, DDRDLL, IODELAY): param -> bits from chipdb extra_func['fuzzed_attrs']
@@ -7756,10 +7804,28 @@ class GW5AST_138C(GW5A):
         return bits
 
     def get_DQS_fuses(self, bel: BelDesc) -> list[CellFuseBits]:
-        """ DQS has no static fuses beyond its parameters (DQS_MODE/HWL/FIFO_MODE_SEL); the DDR3 X4
-        defaults set none. Clocking and control are routed by nextpnr. """
-        bits = self.get_fuzzed_attr_fuses(bel)
-        return [CellFuseBits(bel.x, bel.y, bits)] if bits else []
+        """ DQS dual-block fuses on GW5AST-138C:
+        1. Companion config tile (`cfg_tile`, either the edge DQS tile itself or the companion
+           edge tile for interior ttyp-241 DQS sites such as (63,0) for DQS4 (81,6) and (72,0)
+           for DQS5 (81,5)) receives the measured 11/15 static DQS enable fuses (`cfg_bits`).
+        2. Bank DQS enable tile (`bank_tile`, e.g. (90,0) for Bank 5) receives the 7 bank-DQS
+           enable fuses (`bank_bits`).
+        3. Any non-default parameter overrides (DQS_MODE/HWL/FIFO_MODE_SEL) from `fuzzed_attrs`. """
+        fuses = []
+        ef = self.chipdb.db.extra_func.get((bel.y, bel.x), {})
+        dqs_info = ef.get('fuzzed', {}).get('DQS', {})
+        cfg_rc = dqs_info.get('cfg_tile', [bel.y, bel.x])
+        cfg_bits = {(b[0], b[1]) for b in dqs_info.get('cfg_bits', [])}
+        if cfg_bits:
+            fuses.append(CellFuseBits(cfg_rc[1], cfg_rc[0], cfg_bits))
+        bank_rc = dqs_info.get('bank_tile')
+        bank_bits = {(b[0], b[1]) for b in dqs_info.get('bank_bits', [])}
+        if bank_rc and bank_bits:
+            fuses.append(CellFuseBits(bank_rc[1], bank_rc[0], bank_bits))
+        attr_bits = self.get_fuzzed_attr_fuses(bel)
+        if attr_bits:
+            fuses.append(CellFuseBits(cfg_rc[1], cfg_rc[0], attr_bits))
+        return fuses
 
     def get_IODELAY_fuses(self, bel: BelDesc) -> list[CellFuseBits]:
         bits = self.get_fuzzed_attr_fuses(bel)
@@ -7857,6 +7923,29 @@ class GW5AST_138C(GW5A):
     def get_default_io_type(self) -> str:
         """ Default IO_TYPE """
         return "LVCMOS33"
+
+    def get_io_fuses(self) -> list[CellFuseBits]:
+        fuses = super().get_io_fuses()
+        iologic_sites = set()
+        for cell in self.pnr.in_file['modules'][self.pnr.top_module_name]['cells'].values():
+            nb = cell['attributes'].get('NEXTPNR_BEL', '')
+            if '/IOLOGIC' in nb:
+                xy_part, bel_part = nb.split('/')
+                x_s, y_s = xy_part[1:].split('Y')
+                idx_s = bel_part[7:8]
+                iologic_sites.add((int(x_s), int(y_s), idx_s))
+        av = set()
+        add_attr_val(self.chipdb.db, 'IOLOGIC', av, attrids.iologic_attrids['IOLOGIC_UNKNOWN91'], 78)
+        self.chipdb.get_iologic_attr_val(AttrVal('LSRIMUX_0', '0'), av)
+        self.chipdb.get_iologic_attr_val(AttrVal('LSROMUX_0', '0'), av)
+        for io_cfg in self.chipdb.get_io_cfgs():
+            if self.chipdb.get_loc_bank(io_cfg.x, io_cfg.y) == -1:
+                continue
+            if self.do_not_touch_io(io_cfg.x, io_cfg.y, io_cfg.idx_str):
+                continue
+            if (io_cfg.x, io_cfg.y, io_cfg.idx_str) not in iologic_sites:
+                fuses += self.get_iologic_cell_fuses(io_cfg.x, io_cfg.y, io_cfg.idx_str, av)
+        return fuses
 
     # debug
     def __repr__(self):

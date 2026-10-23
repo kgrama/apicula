@@ -1269,24 +1269,8 @@ def gw5_make_hclk_pips(dev, device, fse, dat: Datfile):
             hclk_idx = gw5_hclk_idx(dev, device, row, col)
             if hclk_idx >= 0:
                 if 48 in fse[ttyp]['wire']:
-                    # GW5AST-138C per-HCLK-line enable fuse: gw_sh sets ONE extra fuse per HCLK
-                    # line in use, beyond the mux-chain pips.  Decoded from silicon-proven
-                    # bitstreams (openddr_ddr3only.fs: line 2 @ (27,0) fuse (3,5), line 0 @
-                    # (81,0) fuse (9,7); softphy_v0.fs: line 0 @ (81,181) fuse (9,128)) -- in
-                    # every case exactly the fuse of the table-48 entry (68+j) -> (64+j) for the
-                    # active line j, with the full active fuse set then 100%% explained.  Fold it
-                    # into the HCLK_MUX_BETA -> HCLK_BUF_BI pip (34+j -> 56+j), the line-specific
-                    # entry on the same path, so gowin_pack emits it whenever the line is routed.
-                    line_en_fuses = {}
-                    if device == 'GW5AST-138C':
-                        for srcid, destid, *fuses in fse[ttyp]['wire'][48]:
-                            if destid - srcid == -4 and srcid in range(68, 72):
-                                line_en_fuses[srcid - 68] = {fuse.fuse_lookup(fse, ttyp, f, device)
-                                                             for f in unpad(fuses)}
                     for srcid, destid, *fuses in fse[ttyp]['wire'][48]:
                         fuses = {fuse.fuse_lookup(fse, ttyp, f, device) for f in unpad(fuses)}
-                        if srcid in range(34, 38) and destid == srcid + 22 and (srcid - 34) in line_en_fuses:
-                            fuses = fuses | line_en_fuses[srcid - 34]
                         # HCLK wires
                         if srcid < hclk_off:
                             if srcid in range(104, 108): # CLKDIV outputs
@@ -3277,7 +3261,37 @@ _dhcen_ce = {
          'L' : [(27,  0, 'A2'), (27,  0, 'A3'), (27,  0, 'D2'), (27,  0, 'D3'), (27,  0, 'D0'), (27,  0, 'D1')],
          'T' : [( 0, 27, 'A2'), ( 0, 27, 'A3'), ( 0, 27, 'D2'), ( 0, 27, 'D3'), (  0,27, 'D0'), ( 0, 27, 'D1')]},
         }
+# GW5AST-138C DHCEN (DHCE) CEN fabric input wires per HCLK line j in 0..3
+# (measured clean-room via differential vendor bitstreams r{0..5}_4dhce vs r{0..5}_nodhce
+# and r3_dhce_only_{0..3}):
+#   j=0 (HCLK_BUF_BI{k}0): 'C2', enable fuse = table 48 entry 68 -> 64
+#   j=1 (HCLK_BUF_BI{k}1): 'C5', enable fuse = table 48 entry 69 -> 65
+#   j=2 (HCLK_BUF_BI{k}2): 'C7', enable fuse = table 48 entry 70 -> 66
+#   j=3 (HCLK_BUF_BI{k}3): 'D2', enable fuse = table 48 entry 71 -> 67
+_gw5ast_dhcen_ce_wires = ['C2', 'C5', 'C7', 'D2']
+
 def fse_create_dhcen(dev, device, fse, dat: Datfile):
+    if device == 'GW5AST-138C':
+        for hclk_idx, (row, col) in _gw5a_hclk_locs[device].items():
+            ttyp = dev.grid[row][col]
+            dhcen_fuses = {}
+            if 48 in fse[ttyp]['wire']:
+                for srcid, destid, *fuses in fse[ttyp]['wire'][48]:
+                    if destid - srcid == -4 and srcid in range(68, 72):
+                        dhcen_fuses[srcid - 68] = {fuse.fuse_lookup(fse, ttyp, f, device)
+                                                   for f in unpad(fuses)}
+            extra = dev.extra_func.setdefault((row, col), {})
+            dhcen = extra.setdefault('dhcen', [])
+            side = 'B' if row == dev.rows - 1 else ('L' if col == 0 else 'R')
+            for j, wire in enumerate(_gw5ast_dhcen_ce_wires):
+                dst_wire = f'HCLK_BUF_BI{hclk_idx}{j}'
+                src_wire = f'HCLK_MUX_BETA{hclk_idx}{j}'
+                dhcen.append({
+                    'pip': [f'X{col}Y{row}', dst_wire, src_wire, side],
+                    'ce': wire,
+                    'fuses': dhcen_fuses.get(j, set()),
+                })
+        return
     if device not in _dhcen_ce:
         print(f'No DHCEN for {device} for now.')
         return
@@ -5604,19 +5618,54 @@ _GW5AST_FUZZED_CELLS = {
     #         'attrs': { 'PARAM=VAL': [(local_brow, local_bcol, bitpos), ...] } }
     # Coords from byte-col gridwalk (BEL_LOCATIONS.md) + re-extracted param differentials
     # (byte frame).  DQS spans tiles: I/O strobe @ (81,5 ttyp241), CONFIG @ (72,0 ttyp64).
-    # DQS: the read-strobe block, one per DDR byte lane.  ttyp-241 = the DQS site (8 on the grid);
-    # registering only the fuzzed io_tile made it a SINGLE-site bel, so a 2-byte-lane DDR3 PHY
-    # (2x DQS) failed with "Unable to place cell 'DQS', no BELs remaining".  sites_ttyp folds all 8.
-    # Left-edge DQS sites (ttyp 257/259) measured by RVALID probes on gw_sh (impl/fuzz/ddr_dll):
-    # group0 IOL4 -> (9,0), group6 IOL94 -> (90,0), group7 IOL96 -> (99,0). Their config attrs are
-    # not fuzzed; the ttyp-241 tile-local offsets below are applied to them unverified.
+    # DQS: the read-strobe block, one per DDR byte lane.
+    # All 20 package-accessible DQS sites measured via gw_sh per-group builds on GW5AST-138C:
+    #   - 6 interior ttyp-241 sites: DQS3 (27,5), DQS4 (81,6), DQS5 (81,5), DQS18 (81,176),
+    #     DQS19 (81,175), DQS20 (27,176) (+ 2 more ttyp-241 at (27,6) and (27,175) via sites_ttyp)
+    #   - 5 left-edge sites (col 0): DQS0 (9,0), DQS1 (18,0), DQS2 (36,0), DQS6 (90,0), DQS7 (99,0)
+    #   - 7 bottom-edge sites (row 108): DQS9 (108,54), DQS10 (108,63), DQS11 (108,81),
+    #     DQS12 (108,100), DQS13 (108,118), DQS14 (108,127), DQS15 (108,136)
+    #   - 5 right-edge sites (col 181): DQS16 (99,181), DQS17 (90,181), DQS21 (36,181),
+    #     DQS22 (18,181), DQS23 (9,181)
     'DQS':  {'io_tile': (81, 5), 'cfg_tile': (72, 0),
              'sites_ttyp': 241,
-             'sites': [(9, 0), (90, 0), (99, 0)],
+             'sites': [(9, 0), (18, 0), (36, 0), (90, 0), (99, 0),
+                       (108, 54), (108, 63), (108, 81), (108, 100), (108, 118), (108, 127), (108, 136),
+                       (9, 181), (18, 181), (36, 181), (90, 181), (99, 181)],
              'attrs': {
                  'DQS_MODE=X2_DDR3': [(20, 79, 7)],          # vs X4 baseline
                  'HWL=false':        [(20, 103, 7)],          # vs true
                  'FIFO_MODE_SEL=1':  [(20, 36, 7), (20, 67, 7)],
+             },
+             'dual_block': {
+                 # Left edge + left interior ttyp-241 DQS sites
+                 (9, 0):     {'cfg_tile': (9, 0),     'cfg_bits': [(0, 4), (1, 15), (2, 12), (3, 15), (4, 14), (8, 11), (10, 0), (10, 13), (10, 15), (11, 1), (11, 15)], 'bank_tile': (18, 0),   'bank_bits': [(20, 43)]},
+                 (18, 0):    {'cfg_tile': (18, 0),    'cfg_bits': [(0, 4), (1, 15), (2, 12), (3, 15), (4, 14), (8, 11), (10, 0), (10, 13), (10, 15), (11, 1), (11, 15)], 'bank_tile': (18, 0),   'bank_bits': [(20, 43)]},
+                 (36, 0):    {'cfg_tile': (36, 0),    'cfg_bits': [(0, 4), (1, 15), (2, 12), (3, 15), (4, 14), (8, 11), (10, 0), (10, 13), (10, 15), (11, 1), (11, 15)], 'bank_tile': (18, 0),   'bank_bits': [(20, 43)]},
+                 (27, 5):    {'cfg_tile': (45, 0),    'cfg_bits': [(0, 4), (1, 15), (2, 12), (3, 15), (4, 14), (8, 11), (10, 0), (10, 13), (10, 15), (11, 1), (11, 15)], 'bank_tile': (18, 0),   'bank_bits': [(20, 43)]},
+                 (27, 6):    {'cfg_tile': (45, 0),    'cfg_bits': [(0, 4), (1, 15), (2, 12), (3, 15), (4, 14), (8, 11), (10, 0), (10, 13), (10, 15), (11, 1), (11, 15)], 'bank_tile': (18, 0),   'bank_bits': [(20, 43)]},
+                 (81, 6):    {'cfg_tile': (63, 0),    'cfg_bits': [(0, 4), (1, 15), (2, 12), (3, 15), (4, 14), (8, 11), (10, 0), (10, 13), (10, 15), (11, 1), (11, 15)], 'bank_tile': (90, 0),   'bank_bits': [(20, 22), (20, 23), (20, 24), (20, 25), (20, 26), (20, 43), (20, 46)]},
+                 (81, 5):    {'cfg_tile': (72, 0),    'cfg_bits': [(20, 57), (20, 58), (20, 59), (20, 62), (20, 63), (20, 68), (20, 73), (20, 78), (20, 79), (20, 91), (20, 103)], 'bank_tile': (90, 0),   'bank_bits': [(20, 22), (20, 23), (20, 24), (20, 25), (20, 26), (20, 43), (20, 46)]},
+                 (90, 0):    {'cfg_tile': (90, 0),    'cfg_bits': [(0, 4), (1, 15), (2, 12), (3, 15), (4, 14), (8, 11), (10, 0), (10, 13), (10, 15), (11, 1), (11, 15)], 'bank_tile': (90, 0),   'bank_bits': [(20, 22), (20, 23), (20, 24), (20, 25), (20, 26), (20, 43), (20, 46)]},
+                 (99, 0):    {'cfg_tile': (99, 0),    'cfg_bits': [(0, 4), (1, 15), (2, 12), (3, 15), (4, 14), (8, 11), (10, 0), (10, 13), (10, 15), (11, 1), (11, 15)], 'bank_tile': (90, 0),   'bank_bits': [(20, 22), (20, 23), (20, 24), (20, 25), (20, 26), (20, 43), (20, 46)]},
+                 # Bottom edge DQS sites
+                 (108, 54):  {'cfg_tile': (108, 54),  'cfg_bits': [(20, 3), (20, 4), (20, 5), (20, 15), (20, 16), (20, 17), (20, 50), (20, 51), (20, 56), (20, 67), (20, 78)], 'bank_tile': (108, 54),  'bank_bits': [(21, 84), (21, 87), (21, 109), (21, 111), (21, 112), (21, 113), (21, 114)]},
+                 (108, 63):  {'cfg_tile': (108, 63),  'cfg_bits': [(20, 3), (20, 4), (20, 5), (20, 15), (20, 16), (20, 17), (20, 50), (20, 51), (20, 56), (20, 67), (20, 78)], 'bank_tile': (108, 54),  'bank_bits': [(21, 84), (21, 87), (21, 109), (21, 111), (21, 112), (21, 113), (21, 114)]},
+                 (108, 81):  {'cfg_tile': (108, 81),  'cfg_bits': [(20, 3), (20, 4), (20, 5), (20, 15), (20, 16), (20, 17), (20, 50), (20, 51), (20, 56), (20, 67), (20, 78)], 'bank_tile': (108, 54),  'bank_bits': [(21, 84), (21, 87), (21, 109), (21, 111), (21, 112), (21, 113), (21, 114)]},
+                 (108, 100): {'cfg_tile': (108, 100), 'cfg_bits': [(20, 3), (20, 4), (20, 5), (20, 15), (20, 16), (20, 17), (20, 36), (20, 37), (20, 50), (20, 51), (20, 56), (20, 67), (20, 68), (20, 69), (20, 78)], 'bank_tile': (108, 127), 'bank_bits': [(21, 5), (21, 6), (21, 7), (21, 8), (21, 10), (21, 32), (21, 35)]},
+                 (108, 118): {'cfg_tile': (108, 118), 'cfg_bits': [(20, 3), (20, 4), (20, 5), (20, 15), (20, 16), (20, 17), (20, 36), (20, 37), (20, 50), (20, 51), (20, 56), (20, 67), (20, 68), (20, 69), (20, 78)], 'bank_tile': (108, 127), 'bank_bits': [(21, 5), (21, 6), (21, 7), (21, 8), (21, 10), (21, 32), (21, 35)]},
+                 (108, 127): {'cfg_tile': (108, 127), 'cfg_bits': [(20, 3), (20, 4), (20, 5), (20, 15), (20, 16), (20, 17), (20, 36), (20, 37), (20, 50), (20, 51), (20, 56), (20, 67), (20, 68), (20, 69), (20, 78)], 'bank_tile': (108, 127), 'bank_bits': [(21, 5), (21, 6), (21, 7), (21, 8), (21, 10), (21, 32), (21, 35)]},
+                 (108, 136): {'cfg_tile': (108, 136), 'cfg_bits': [(20, 3), (20, 4), (20, 5), (20, 15), (20, 16), (20, 17), (20, 36), (20, 37), (20, 50), (20, 51), (20, 56), (20, 67), (20, 68), (20, 69), (20, 78)], 'bank_tile': (108, 127), 'bank_bits': [(21, 5), (21, 6), (21, 7), (21, 8), (21, 10), (21, 32), (21, 35)]},
+                 # Right edge + right interior ttyp-241 DQS sites
+                 (99, 181):  {'cfg_tile': (99, 181),  'cfg_bits': [(0, 131), (1, 120), (2, 123), (3, 120), (4, 121), (8, 124), (10, 120), (10, 122), (10, 135), (11, 120), (11, 134)], 'bank_tile': (90, 181),  'bank_bits': [(20, 89), (20, 92), (20, 109), (20, 110), (20, 111), (20, 112), (20, 113)]},
+                 (90, 181):  {'cfg_tile': (90, 181),  'cfg_bits': [(0, 131), (1, 120), (2, 123), (3, 120), (4, 121), (8, 124), (10, 120), (10, 122), (10, 135), (11, 120), (11, 134)], 'bank_tile': (90, 181),  'bank_bits': [(20, 89), (20, 92), (20, 109), (20, 110), (20, 111), (20, 112), (20, 113)]},
+                 (81, 176):  {'cfg_tile': (72, 181),  'cfg_bits': [(20, 41), (20, 42), (20, 43), (20, 46), (20, 47), (20, 52), (20, 57), (20, 62), (20, 63), (20, 75), (20, 87)], 'bank_tile': (90, 181),  'bank_bits': [(20, 89), (20, 92), (20, 109), (20, 110), (20, 111), (20, 112), (20, 113)]},
+                 (81, 175):  {'cfg_tile': (63, 181),  'cfg_bits': [(0, 131), (1, 120), (2, 123), (3, 120), (4, 121), (8, 124), (10, 120), (10, 122), (10, 135), (11, 120), (11, 134)], 'bank_tile': (90, 181),  'bank_bits': [(20, 89), (20, 92), (20, 109), (20, 110), (20, 111), (20, 112), (20, 113)]},
+                 (27, 176):  {'cfg_tile': (45, 181),  'cfg_bits': [(0, 122), (0, 124), (0, 131), (0, 133), (0, 134), (1, 120), (2, 123), (3, 120), (4, 121), (8, 124), (10, 120), (10, 122), (10, 135), (11, 120), (11, 134)], 'bank_tile': (18, 181),  'bank_bits': [(20, 89), (20, 92), (20, 109), (20, 110), (20, 111), (20, 112), (20, 113)]},
+                 (27, 175):  {'cfg_tile': (45, 181),  'cfg_bits': [(0, 122), (0, 124), (0, 131), (0, 133), (0, 134), (1, 120), (2, 123), (3, 120), (4, 121), (8, 124), (10, 120), (10, 122), (10, 135), (11, 120), (11, 134)], 'bank_tile': (18, 181),  'bank_bits': [(20, 89), (20, 92), (20, 109), (20, 110), (20, 111), (20, 112), (20, 113)]},
+                 (36, 181):  {'cfg_tile': (36, 181),  'cfg_bits': [(0, 122), (0, 124), (0, 131), (0, 133), (0, 134), (1, 120), (2, 123), (3, 120), (4, 121), (8, 124), (10, 120), (10, 122), (10, 135), (11, 120), (11, 134)], 'bank_tile': (18, 181),  'bank_bits': [(20, 89), (20, 92), (20, 109), (20, 110), (20, 111), (20, 112), (20, 113)]},
+                 (18, 181):  {'cfg_tile': (18, 181),  'cfg_bits': [(0, 122), (0, 124), (0, 131), (0, 133), (0, 134), (1, 120), (2, 123), (3, 120), (4, 121), (8, 124), (10, 120), (10, 122), (10, 135), (11, 120), (11, 134)], 'bank_tile': (18, 181),  'bank_bits': [(20, 89), (20, 92), (20, 109), (20, 110), (20, 111), (20, 112), (20, 113)]},
+                 (9, 181):   {'cfg_tile': (9, 181),   'cfg_bits': [(0, 122), (0, 124), (0, 131), (0, 133), (0, 134), (1, 120), (2, 123), (3, 120), (4, 121), (8, 124), (10, 120), (10, 122), (10, 135), (11, 120), (11, 134)], 'bank_tile': (18, 181),  'bank_bits': [(20, 89), (20, 92), (20, 109), (20, 110), (20, 111), (20, 112), (20, 113)]},
              }},
     'SDPB': {'io_tile': (99, 161), 'cfg_tile': (99, 161),
              'attrs': {'READ_MODE=1': [(20, 13, 7), (20, 83, 7)]},   # +mirror @ (99,155)
@@ -5821,9 +5870,18 @@ def fse_create_gw5ast_fuzzed_cells(dev, device):
                       if dev.grid[r][c] == st]
         # multi-site cells: register the bel + same tile-local attrs at every site
         # (identical hard block; local fuse offsets are site-invariant).
+        dual_block = info.get('dual_block', {})
         for (sr, sc) in sites:
             se = dev.extra_func.setdefault((sr, sc), {})
-            se.setdefault('fuzzed', {})[cell] = {'io_tile': [sr, sc], 'cfg_tile': [sr, sc]}
+            db_entry = dual_block.get((sr, sc), {})
+            cfg_rc = list(db_entry.get('cfg_tile', (sr, sc)))
+            fuzzed_entry = {'io_tile': [sr, sc], 'cfg_tile': cfg_rc}
+            if 'cfg_bits' in db_entry:
+                fuzzed_entry['cfg_bits'] = [list(b) for b in db_entry['cfg_bits']]
+            if 'bank_tile' in db_entry:
+                fuzzed_entry['bank_tile'] = list(db_entry['bank_tile'])
+                fuzzed_entry['bank_bits'] = [list(b) for b in db_entry.get('bank_bits', [])]
+            se.setdefault('fuzzed', {})[cell] = fuzzed_entry
             if attrs:
                 se.setdefault('fuzzed_attrs', {})[cell] = {
                     av: [list(b) for b in bits] for av, bits in attrs.items()}
